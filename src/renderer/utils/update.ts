@@ -131,11 +131,8 @@ export const getLatestReleaseInfo = async (): Promise<GithubReleaseInfo | null> 
     const headers = {};
     // 构建 API URL 列表
     const apiUrls = [
-      // 原始地址
-      'https://api.github.com/repos/algerkong/AlgerMusicPlayer/releases/latest',
-
-      // 使用代理节点
-      'http://music.alger.fun/package.json'
+      // 本仓库（aweicjnb/AlgerMusic）的最新发布
+      'https://api.github.com/repos/aweicjnb/AlgerMusic/releases/latest'
     ];
 
     if (token) {
@@ -159,7 +156,7 @@ export const getLatestReleaseInfo = async (): Promise<GithubReleaseInfo | null> 
           return {
             tag_name: response.data.version,
             body: changelogResponse.data,
-            html_url: 'https://github.com/algerkong/AlgerMusicPlayer/releases/latest',
+            html_url: 'https://github.com/aweicjnb/AlgerMusic/releases/latest',
             assets: []
           } as unknown as GithubReleaseInfo;
         }

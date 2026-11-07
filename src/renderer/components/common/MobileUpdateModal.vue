@@ -189,7 +189,7 @@ const handleUpdate = async () => {
     // 回退到直接打开 GitHub Releases
     const releaseUrl =
       updateInfo.value.releaseInfo?.html_url ||
-      'https://github.com/algerkong/AlgerMusicPlayer/releases/latest';
+      'https://github.com/aweicjnb/AlgerMusic/releases/latest';
     window.open(releaseUrl, '_blank');
     closeModal();
   }

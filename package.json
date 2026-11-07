@@ -122,8 +122,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "algerkong",
-        "repo": "AlgerMusicPlayer"
+        "owner": "aweicjnb",
+        "repo": "AlgerMusic"
       }
     ],
     "extraResources": [
@@ -166,9 +166,7 @@
         {
           "target": "nsis",
           "arch": [
-            "x64",
-            "ia32",
-            "arm64"
+            "x64"
           ]
         }
       ],

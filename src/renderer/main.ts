@@ -2,6 +2,9 @@ import './index.css';
 import '@/assets/css/mobile.css';
 import 'animate.css';
 import 'remixicon/fonts/remixicon.css';
+// 自定义外观：主界面壁纸、界面透明度、夜间模式亮度
+import './alger-custom/theme.css';
+import './alger-custom/theme.js';
 
 import { createApp } from 'vue';
 

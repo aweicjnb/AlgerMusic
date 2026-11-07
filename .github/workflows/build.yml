@@ -1,30 +1,19 @@
 name: Build and Release
 
+# 推送 v 开头的标签（如 v5.1.0）时构建 Windows 安装包并发布到 Releases；
+# 也可以在 Actions 页面手动运行，只构建不发布。
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - id: mac-x64
-            os: macos-latest
-            build_command: npm run build:mac:x64
-          - id: mac-arm64
-            os: macos-latest
-            build_command: npm run build:mac:arm64
-          - id: windows
-            os: windows-latest
-            build_command: npm run build:win
-          - id: linux
-            os: ubuntu-latest
-            build_command: npm run build:linux
+    runs-on: windows-latest
 
     steps:
       - name: Check out Git repository
@@ -38,38 +27,24 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Install Linux build dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev webkit2gtk-4.0 libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Build artifacts
-        run: ${{ matrix.build_command }}
+      - name: Build Windows installer
+        run: npm run build:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Prepare mac update metadata
-        if: startsWith(matrix.id, 'mac-')
-        run: rm -f dist/latest-mac.yml
-
-      - name: Upload release bundle
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.id }}
+          name: windows
           if-no-files-found: error
           path: |
-            dist/*.dmg
-            dist/*.zip
             dist/*.exe
-            dist/*.deb
-            dist/*.rpm
-            dist/*.AppImage
-            dist/latest*.yml
             dist/*.blockmap
+            dist/latest*.yml
 
   release:
     needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     steps:
@@ -79,7 +54,7 @@ jobs:
       - name: Get version from tag
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
 
-      - name: Read release notes
+      - name: Read upstream release notes
         run: |
           NOTES=$(awk "/## \[v${{ env.VERSION }}\]/{p=1;print;next} /## \[v/{p=0}p" CHANGELOG.md)
           echo "NOTES<<EOF" >> $GITHUB_ENV
@@ -89,24 +64,25 @@ jobs:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-artifacts
-
-      - name: Prepare release files
-        run: |
-          mkdir -p release-upload
-          find release-artifacts -type f \
-            ! -name 'latest-mac-x64.yml' \
-            ! -name 'latest-mac-arm64.yml' \
-            -exec cp {} release-upload/ \;
-          node scripts/merge_latest_mac_yml.mjs \
-            release-artifacts/mac-x64/latest-mac-x64.yml \
-            release-artifacts/mac-arm64/latest-mac-arm64.yml \
-            release-upload/latest-mac.yml
+          name: windows
+          path: release-upload
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ env.NOTES }}
+          body: |
+            基于 [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer) v${{ env.VERSION }} 的个人定制版，仅 Windows x64。
+
+            - 应用图标换成小猫咪
+            - 主界面壁纸，可调界面透明度、夜间模式亮度（标题栏右上角调色板按钮）
+            - 去掉百度统计
+            - 自动更新改为从本仓库获取
+
+            下载 `AlgerMusicPlayer-${{ env.VERSION }}-win-x64.exe` 安装即可。
+
+            ---
+
+            ${{ env.NOTES }}
           draft: false
           prerelease: false
           files: release-upload/*

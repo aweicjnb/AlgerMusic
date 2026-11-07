@@ -1,3 +1,18 @@
+> **这是 [algerkong/AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer) 的个人定制版**，基于 v5.1.0，只构建 Windows x64 安装包。
+>
+> 相对原版的改动：
+>
+> - 应用图标（程序、快捷方式、任务栏、托盘、侧边栏）换成小猫咪
+> - 主界面支持壁纸：点标题栏右上角的调色板按钮，可以更换壁纸、调整界面透明度和夜间模式亮度
+> - 去掉百度统计
+> - 自动更新改为从本仓库的 Releases 获取
+>
+> **下载**：[Releases](https://github.com/aweicjnb/AlgerMusic/releases/latest) 里的 `AlgerMusicPlayer-<版本>-win-x64.exe`。
+>
+> **发布新版本**：修改 `package.json` 里的 `version`，推送对应的 `v<版本>` 标签，GitHub Actions 会自动构建并发布。
+>
+> 原项目使用 MIT 协议，版权归原作者所有，见 [LICENSE](./LICENSE)。以下为原项目说明。
+
 <h2 align="center">🎵 Alger Music Player</h2>
 <div align="center">
 <div align="center">
