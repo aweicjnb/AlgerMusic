@@ -7,8 +7,6 @@ export default {
   search: '검색',
   loading: '로딩 중...',
   loadingMore: '더 불러오기...',
-  alipay: '알리페이',
-  wechat: '위챗 페이',
   on: '켜기',
   off: '끄기',
   show: '표시',

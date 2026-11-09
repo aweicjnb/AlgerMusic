@@ -7,8 +7,6 @@ export default {
   search: '搜尋',
   loading: '載入中...',
   loadingMore: '載入更多...',
-  alipay: '支付寶',
-  wechat: '微信支付',
   on: '開啟',
   off: '關閉',
   show: '顯示',

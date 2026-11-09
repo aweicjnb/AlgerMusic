@@ -9,7 +9,6 @@ export default {
     application: '应用设置',
     network: '网络设置',
     system: '系统管理',
-    donation: '捐赠支持',
     about: '关于'
   },
   basic: {
@@ -274,9 +273,6 @@ export default {
     hasUpdate: '发现新版本',
     gotoUpdate: '前往更新',
     manualUpdate: '官网更新',
-    gotoGithub: '前往 Github',
-    author: '作者',
-    authorDesc: 'algerkong 点个star🌟呗',
     messages: {
       checkError: '检查更新失败，请稍后重试'
     }

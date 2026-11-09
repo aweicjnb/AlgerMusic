@@ -18,7 +18,6 @@ type SetConfig = {
   noAnimate: boolean;
   animationSpeed: number;
   author: string;
-  authorUrl: string;
   musicApiPort: number;
   closeAction: 'ask' | 'minimize' | 'close';
   musicQuality: string;

@@ -15,7 +15,18 @@
       class="background-layer"
       :style="backgroundImageStyle"
     ></div>
-    <div id="drawer-target" :class="[config.theme]" class="relative z-10">
+    <div
+      id="drawer-target"
+      :class="[config.theme, { 'folia-stage-on': foliaActive }]"
+      class="relative z-10"
+      @mousemove="revealFoliaControls"
+    >
+      <!-- 浮名歌词动画 -->
+      <folia-lyric-stage v-if="foliaActive" :mode="foliaStage" />
+      <div v-if="foliaActive" class="folia-controls" :class="{ visible: foliaControlsVisible }">
+        <simple-play-bar :isDark="false" />
+      </div>
+
       <!-- 左侧关闭按钮 -->
       <div
         class="control-left absolute top-8 left-8 z-[9999]"
@@ -40,12 +51,36 @@
           <lyric-settings ref="lyricSettingsRef" />
         </n-popover>
 
+        <n-popover v-model:show="foliaMenuVisible" trigger="click" placement="bottom" raw>
+          <template #trigger>
+            <div class="control-btn" :class="{ 'folia-on': foliaEnabled }" title="歌词动画">
+              <i class="ri-magic-line"></i>
+            </div>
+          </template>
+          <div class="folia-style-menu">
+            <div
+              v-for="option in foliaMenuOptions"
+              :key="option.value"
+              class="folia-style-item"
+              :class="{ active: foliaStyle === option.value }"
+              @click="selectFoliaStyle(option.value)"
+            >
+              <span class="folia-style-name">{{ option.label }}</span>
+              <span class="folia-style-desc">{{ option.description }}</span>
+            </div>
+          </div>
+        </n-popover>
+
         <div class="control-btn" @click="toggleFullScreen">
           <i :class="isFullScreen ? 'ri-fullscreen-exit-line' : 'ri-fullscreen-line'"></i>
         </div>
       </div>
 
-      <div class="content-wrapper" :style="{ width: `${config.contentWidth}%` }">
+      <div
+        v-show="!foliaActive"
+        class="content-wrapper"
+        :style="{ width: `${config.contentWidth}%` }"
+      >
         <!-- 左侧：封面区域 -->
         <div
           v-if="!config.hideCover"
@@ -134,7 +169,7 @@
                 <span>{{ t('player.lrc.noAutoScroll') }}</span>
               </div>
               <div
-                v-for="(item, index) in lrcArray"
+                v-for="(item, index) in foliaActive ? [] : lrcArray"
                 :id="`music-lrc-text-${index}`"
                 :key="index"
                 class="music-lrc-text"
@@ -187,6 +222,7 @@ import { useI18n } from 'vue-i18n';
 
 import Cover3D from '@/components/cover/Cover3D.vue';
 import LyricCorrectionControl from '@/components/lyric/LyricCorrectionControl.vue';
+import FoliaLyricStage from '@/components/lyric/FoliaLyricStage.vue';
 import LyricSettings from '@/components/lyric/LyricSettings.vue';
 import SimplePlayBar from '@/components/player/SimplePlayBar.vue';
 import {
@@ -201,6 +237,7 @@ import {
   textColors,
   useLyricProgress
 } from '@/hooks/MusicHook';
+import { FOLIA_STYLES, type FoliaStyle } from '@/folia/styles';
 import { useArtist } from '@/hooks/useArtist';
 import { usePlayerStore } from '@/store/modules/player';
 import { useSettingsStore } from '@/store/modules/settings';
@@ -316,6 +353,71 @@ const emit = defineEmits(['update:modelValue']);
 const isVisible = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
+});
+
+// 歌词动画样式，'off' 表示用原来的歌词界面；只在有带时间的歌词时生效
+const FOLIA_STYLE_STORAGE_KEY = 'folia-stage-style';
+const LEGACY_FOLIA_STORAGE_KEY = 'folia-stage-enabled';
+type FoliaStyleOption = FoliaStyle | 'off';
+const foliaMenuOptions: { value: FoliaStyleOption; label: string; description: string }[] = [
+  { value: 'off', label: '关闭', description: '使用原来的歌词界面' },
+  ...FOLIA_STYLES
+];
+const readFoliaStyle = (): FoliaStyleOption => {
+  const saved = localStorage.getItem(FOLIA_STYLE_STORAGE_KEY);
+  if (foliaMenuOptions.some((option) => option.value === saved)) return saved as FoliaStyleOption;
+  return localStorage.getItem(LEGACY_FOLIA_STORAGE_KEY) === '1' ? 'fume' : 'off';
+};
+const foliaStyle = ref<FoliaStyleOption>(readFoliaStyle());
+const foliaMenuVisible = ref(false);
+const foliaEnabled = computed(() => foliaStyle.value !== 'off');
+const foliaStage = computed<FoliaStyle>(() =>
+  foliaStyle.value === 'off' ? 'fume' : foliaStyle.value
+);
+const selectFoliaStyle = (style: FoliaStyleOption) => {
+  foliaStyle.value = style;
+  foliaMenuVisible.value = false;
+  localStorage.setItem(FOLIA_STYLE_STORAGE_KEY, style);
+};
+
+// 换歌时歌词会短暂清空，等一下再判断是否真的没有歌词，避免界面闪烁
+const NO_LYRIC_DELAY_MS = 1500;
+const foliaHasLyric = ref(lrcArray.value.length > 0);
+let noLyricTimer: ReturnType<typeof setTimeout> | undefined;
+watch(lrcArray, (value) => {
+  clearTimeout(noLyricTimer);
+  if (value.length > 0) {
+    foliaHasLyric.value = true;
+  } else {
+    noLyricTimer = setTimeout(() => {
+      foliaHasLyric.value = false;
+    }, NO_LYRIC_DELAY_MS);
+  }
+});
+const foliaActive = computed(
+  () =>
+    foliaEnabled.value &&
+    isVisible.value &&
+    !isMobile.value &&
+    foliaHasLyric.value &&
+    lrcArray.value[0]?.startTime !== -1
+);
+
+// 播放控制条：动动鼠标才显示，过几秒自动隐藏
+const FOLIA_CONTROLS_HIDE_MS = 3000;
+const foliaControlsVisible = ref(false);
+let foliaControlsTimer: ReturnType<typeof setTimeout> | undefined;
+const revealFoliaControls = () => {
+  if (!foliaActive.value) return;
+  foliaControlsVisible.value = true;
+  clearTimeout(foliaControlsTimer);
+  foliaControlsTimer = setTimeout(() => {
+    foliaControlsVisible.value = false;
+  }, FOLIA_CONTROLS_HIDE_MS);
+};
+onBeforeUnmount(() => {
+  clearTimeout(noLyricTimer);
+  clearTimeout(foliaControlsTimer);
 });
 
 // 歌词滚动方法
@@ -1020,6 +1122,60 @@ defineExpose({
 
 .control-right {
   @apply flex items-center gap-2;
+}
+
+.control-btn.folia-on {
+  color: #22c55e;
+}
+
+.folia-style-menu {
+  @apply p-1.5 rounded-xl;
+  width: 220px;
+  background: rgba(24, 24, 27, 0.96);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.folia-style-item {
+  @apply flex items-baseline gap-2 px-3 py-2 rounded-lg cursor-pointer;
+  color: #e4e4e7;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  &.active {
+    color: #22c55e;
+    background: rgba(34, 197, 94, 0.12);
+  }
+}
+
+.folia-style-name {
+  @apply text-sm font-medium flex-shrink-0;
+}
+
+.folia-style-desc {
+  @apply text-xs truncate;
+  color: #a1a1aa;
+}
+
+/* 背景每帧都在变，毛玻璃要反复重算 */
+.folia-stage-on .control-btn {
+  backdrop-filter: none;
+}
+
+.folia-controls {
+  @apply absolute left-1/2 bottom-6 z-[9999];
+  width: min(520px, 80%);
+  transform: translateX(-50%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+
+  &.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .control-btn {

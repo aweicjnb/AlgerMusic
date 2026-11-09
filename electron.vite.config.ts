@@ -18,11 +18,14 @@ export default defineConfig({
         '@i18n': resolve('src/i18n')
       }
     },
+    // src/renderer/folia 里是 React 组件
+    esbuild: { jsx: 'automatic' },
     plugins: [
       vue(),
       viteCompression(),
       VueDevTools(),
       AutoImport({
+        exclude: [/[\\/]node_modules[\\/]/, /[\\/]\.git[\\/]/, /[\\/]renderer[\\/]folia[\\/]/],
         imports: [
           'vue',
           {

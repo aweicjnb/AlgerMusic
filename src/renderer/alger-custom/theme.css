@@ -66,6 +66,11 @@ html.ct-wall.dark:not(.ct-off) .layout-page .music-play-bar {
   background: rgb(var(--ct-lift) var(--ct-lift) var(--ct-lift));
   display: none;
 }
+/* 歌词动画每帧都在重绘，全屏混合层会拖慢画面，动画有自己的配色 */
+html.folia-stage #ct-lift {
+  display: none !important;
+}
+
 html.dark:not(.ct-off) #ct-lift {
   display: block;
 }

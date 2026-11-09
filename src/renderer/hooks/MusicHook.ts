@@ -996,8 +996,32 @@ export const initAudioListeners = async () => {
 };
 
 // 监听URL过期事件，自动重新获取URL并恢复播放
+// 同一首歌在一段时间内最多自动恢复几次。新链接也播不了时会再次触发这个事件，不设上限就会无限循环
+const URL_RECOVERY_MAX_ATTEMPTS = 2;
+const URL_RECOVERY_WINDOW_MS = 60_000;
+let urlRecovery: { id: SongResult['id'] | undefined; count: number; startedAt: number } = {
+  id: undefined,
+  count: 0,
+  startedAt: 0
+};
+
 audioService.on('url_expired', async (expiredTrack) => {
   if (!expiredTrack) return;
+
+  const now = Date.now();
+  if (urlRecovery.id !== expiredTrack.id || now - urlRecovery.startedAt > URL_RECOVERY_WINDOW_MS) {
+    urlRecovery = { id: expiredTrack.id, count: 0, startedAt: now };
+  }
+  urlRecovery.count += 1;
+
+  if (urlRecovery.count > URL_RECOVERY_MAX_ATTEMPTS) {
+    // 只在刚超过上限时提示一次，之后同一首歌的失败事件直接忽略
+    if (urlRecovery.count === URL_RECOVERY_MAX_ATTEMPTS + 1) {
+      getPlayerStore().setPlayMusic(false);
+      message.error('这首歌暂时无法播放，请换一首试试');
+    }
+    return;
+  }
 
   console.log('检测到URL过期事件，准备重新获取URL', expiredTrack.name);
 
@@ -1010,9 +1034,13 @@ audioService.on('url_expired', async (expiredTrack) => {
       playMusicUrl: undefined
     };
 
-    await getPlayerStore().handlePlayMusic(trackToPlay, getPlayerStore().play);
+    const shouldPlay = getPlayerStore().play;
+    const recovered = await getPlayerStore().handlePlayMusic(trackToPlay, shouldPlay);
 
-    message.success('已自动恢复播放');
+    // 只有真的恢复并且在播放时才提示
+    if (recovered && shouldPlay) {
+      message.success('已自动恢复播放');
+    }
   } catch (error) {
     console.error('处理URL过期事件失败:', error);
     message.error('恢复播放失败，请手动点击播放');

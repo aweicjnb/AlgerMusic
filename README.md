@@ -4,40 +4,17 @@
 >
 > - 应用图标（程序、快捷方式、任务栏、托盘、侧边栏）换成小猫咪
 > - 主界面支持壁纸：点标题栏右上角的调色板按钮，可以更换壁纸、调整界面透明度和夜间模式亮度
-> - 去掉百度统计
+> - 全屏歌词动画：打开全屏歌词，点右上角魔法棒，有浮名、流光、倾诉、云阶、回环、心象、静止 7 种样式，可跟随“字体设置”（动画代码来自 [Folia](https://github.com/chthollyphile/folia-major)，见 [NOTICE](./src/renderer/folia/NOTICE.md)）
+> - 去掉百度统计、打赏和作者引流内容
 > - 自动更新改为从本仓库的 Releases 获取
 >
 > **下载**：[Releases](https://github.com/aweicjnb/AlgerMusic/releases/latest) 里的 `AlgerMusicPlayer-<版本>-win-x64.exe`。
 >
 > **发布新版本**：修改 `package.json` 里的 `version`，推送对应的 `v<版本>` 标签，GitHub Actions 会自动构建并发布。
 >
-> 原项目使用 MIT 协议，版权归原作者所有，见 [LICENSE](./LICENSE)。以下为原项目说明。
+> **协议**：因包含 Folia（AGPL-3.0）的代码，本项目按 [GNU AGPL v3.0](./LICENSE) 发布。原项目 AlgerMusicPlayer 使用 MIT 协议，版权归原作者所有，声明保留在 [LICENSE-MIT](./LICENSE-MIT)。以下为原项目说明。
 
 <h2 align="center">🎵 Alger Music Player</h2>
-<div align="center">
-<div align="center">
-  <a href="https://github.com/algerkong/AlgerMusicPlayer/stargazers">
-    <img src="https://img.shields.io/github/stars/algerkong/AlgerMusicPlayer?style=for-the-badge&logo=github&label=Stars&logoColor=white&color=22c55e" alt="GitHub stars">
-  </a>
-  <a href="https://github.com/algerkong/AlgerMusicPlayer/releases">
-    <img src="https://img.shields.io/github/v/release/algerkong/AlgerMusicPlayer?style=for-the-badge&logo=github&label=Release&logoColor=white&color=1a67af" alt="GitHub release">
-  </a>
-  <a href="https://pd.qq.com/s/cs056n33q?b=5">
-    <img src="https://img.shields.io/badge/QQ频道-algermusic-blue?style=for-the-badge&color=yellow" alt="加入频道">
-  </a>
-  <a href="https://t.me/+9efsKRuvKBk2NWVl">
-    <img src="https://img.shields.io/badge/AlgerMusic-blue?style=for-the-badge&logo=telegram&logoColor=white&label=Telegram" alt="Telegram">
-  </a>
-   <a href="https://donate.alger.fun/">
-    <img src="https://img.shields.io/badge/%E9%A1%B9%E7%9B%AE%E6%8D%90%E8%B5%A0-blue?style=for-the-badge&logo=telegram&logoColor=pink&color=pink&label=%E8%B5%9E%E5%8A%A9" alt="赞助">
-  </a>
-</div>
-</div>
-<div align="center">
-  <a href="https://hellogithub.com/repository/607b849c598d48e08fe38789d156ebdc" target="_blank"><img src="https://api.hellogithub.com/v1/widgets/recommend.svg?rid=607b849c598d48e08fe38789d156ebdc&claim_uid=ObuMXUfeHBmk9TI&theme=neutral" alt="Featured｜HelloGitHub" width="160" height="32" /></a>
-</div>
-
-[项目下安装以及常用问题文档](https://www.yuque.com/alger-pfg5q/ip4f1a/bmgmfmghnhgwghkm?singleDoc#)
 
 主要功能如下
 
@@ -72,10 +49,6 @@
 
 一个第三方音乐播放器、本地服务、桌面歌词、音乐下载、最高音质
 
-## 预览地址
-
-[http://music.alger.fun/](http://music.alger.fun/)
-
 ## 软件截图
 
 ![首页白](./docs/image.png)
@@ -95,18 +68,6 @@ npm run dev
 ## 开发文档
 
 点击这里[开发文档](./DEV.md)
-
-## 赞赏☕️
-
-[赞赏列表](http://donate.alger.fun/)
-| 微信赞赏 | 支付宝赞赏 |
-| :--------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------: |
-| <img src="https://github.com/algerkong/algerkong/blob/main/wechat.jpg?raw=true" alt="WeChat QRcode" width=200> <br><small>喝点咖啡继续干</small> | <img src="https://github.com/algerkong/algerkong/blob/main/alipay.jpg?raw=true" alt="Wechat QRcode" width=200> <br><small>来包辣条吧~</small> |
-
-## 项目统计
-
-[![Stargazers over time](https://starchart.cc/algerkong/AlgerMusicPlayer.svg?variant=adaptive)](https://starchart.cc/algerkong/AlgerMusicPlayer)
-![Alt](https://repobeats.axiom.co/api/embed/c4d01b3632e241c90cdec9508dfde86a7f54c9f5.svg 'Repobeats analytics image')
 
 ## 欢迎提Issues
 

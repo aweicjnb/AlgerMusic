@@ -169,7 +169,7 @@ const handleUpdate = async () => {
   const version = updateInfo.value.latestVersion;
 
   // Android APK 下载地址
-  const downloadUrl = `https://github.com/algerkong/AlgerMusicPlayer/releases/download/v${version}/AlgerMusicPlayer-${version}.apk`;
+  const downloadUrl = `https://github.com/aweicjnb/AlgerMusic/releases/download/v${version}/AlgerMusicPlayer-${version}.apk`;
 
   try {
     // 获取代理节点

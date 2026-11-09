@@ -7,8 +7,6 @@ export default {
   search: '検索',
   loading: '読み込み中...',
   loadingMore: 'さらに読み込み中...',
-  alipay: 'Alipay',
-  wechat: 'WeChat Pay',
   on: 'オン',
   off: 'オフ',
   show: '表示',

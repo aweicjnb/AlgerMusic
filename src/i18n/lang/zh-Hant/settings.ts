@@ -9,7 +9,6 @@ export default {
     application: '應用程式設定',
     network: '網路設定',
     system: '系統管理',
-    donation: '捐贈支持',
     about: '關於'
   },
   basic: {
@@ -270,9 +269,6 @@ export default {
     hasUpdate: '發現新版本',
     gotoUpdate: '前往更新',
     manualUpdate: '官網更新',
-    gotoGithub: '前往 Github',
-    author: '作者',
-    authorDesc: 'algerkong 點個star🌟呗',
     messages: {
       checkError: '檢查更新失敗，請稍後重試'
     }

@@ -1,10 +1,11 @@
 {
   "name": "AlgerMusicPlayer",
-  "version": "5.1.0",
+  "version": "5.1.1",
   "description": "Alger Music Player",
-  "author": "Alger <algerkc@qq.com>",
+  "author": "aweicjnb",
   "main": "./out/main/index.js",
-  "homepage": "https://github.com/algerkong/AlgerMusicPlayer",
+  "homepage": "https://github.com/aweicjnb/AlgerMusic",
+  "license": "AGPL-3.0",
   "scripts": {
     "prepare": "husky",
     "format": "prettier --write ./src",
@@ -58,6 +59,7 @@
     "vue-i18n": "^11.2.2"
   },
   "devDependencies": {
+    "@chenglou/pretext": "^0.0.9",
     "@electron-toolkit/eslint-config": "^2.1.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
     "@electron-toolkit/tsconfig": "^1.0.1",
@@ -66,6 +68,8 @@
     "@types/howler": "^2.2.12",
     "@types/node": "^20.19.26",
     "@types/node-fetch": "^2.6.13",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@types/tinycolor2": "^1.4.6",
     "@typescript-eslint/eslint-plugin": "^8.49.0",
     "@typescript-eslint/parser": "^8.49.0",
@@ -90,16 +94,20 @@
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "eslint-plugin-vue": "^10.6.2",
     "eslint-plugin-vue-scoped-css": "^2.12.0",
+    "framer-motion": "^13.4.3",
     "globals": "^16.5.0",
     "howler": "^2.2.4",
     "lint-staged": "^15.5.2",
     "lodash": "^4.17.21",
+    "lucide-react": "^1.48.0",
     "marked": "^15.0.12",
     "naive-ui": "^2.43.2",
     "pinia": "^3.0.4",
     "pinyin-match": "^1.2.10",
     "postcss": "^8.5.6",
     "prettier": "^3.7.4",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "remixicon": "^4.7.0",
     "sass": "^1.96.0",
     "tailwindcss": "^3.4.19",
@@ -200,7 +208,7 @@
       ],
       "artifactName": "${productName}-${version}-linux-${arch}.${ext}",
       "category": "Audio",
-      "maintainer": "Alger <algerkc@qq.com>"
+      "maintainer": "aweicjnb"
     },
     "nsis": {
       "oneClick": false,
@@ -213,7 +221,10 @@
       "include": "build/installer.nsh",
       "deleteAppDataOnUninstall": true,
       "uninstallDisplayName": "AlgerMusicPlayer"
-    }
+    },
+    "files": [
+      "!wallpapers/**"
+    ]
   },
   "pnpm": {
     "onlyBuiltDependencies": [

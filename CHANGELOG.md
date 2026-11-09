@@ -1,5 +1,25 @@
 # 更新日志
 
+## v5.1.1
+
+### ✨ 新功能
+
+- 全屏歌词新增 7 种动画样式（浮名、流光、倾诉、云阶、回环、心象、静止），点右上角魔法棒切换，代码来自 Folia
+- 浮名：唱到的字会砸下、闪白并带柔光，相邻的字跟着起伏，长音有呼吸效果
+- 歌词动画跟随“字体设置”
+
+### 🐛 修复
+
+- 修复音频加载失败时反复弹出“已自动恢复播放”的循环
+
+### 🗑️ 移除
+
+- 去掉打赏收款码、启动弹窗、使用须知和作者引流内容
+
+### 📄 协议
+
+- 因包含 Folia 的代码，本版本起按 GNU AGPL v3.0 发布，原项目的 MIT 版权声明保留在 LICENSE-MIT
+
 ## v5.1.0
 
 ### ✨ 新功能
@@ -98,25 +118,3 @@
 - 日推不感兴趣调用官方接口 - 感谢 [harenchi](https://github.com/souvenp) 的贡献
 - 代码提交流程优化，添加 lint-staged
 
-## 赞赏支持☕️
-
-[赞赏列表](https://donate.alger.fun/donate)
-
-<table>
-  <tr>
-    <th style="text-align:center">微信赞赏</th>
-    <th style="width:100px"></th>
-    <th style="text-align:center">支付宝赞赏</th>
-  </tr>
-  <tr>
-    <td align="center">
-      <img src="https://github.com/algerkong/algerkong/blob/main/wechat.jpg?raw=true" alt="WeChat QRcode" width="200"><br>
-      <h6>☕️喝点咖啡继续干</h6>
-    </td>
-    <td></td>
-    <td align="center">
-      <img src="https://github.com/algerkong/algerkong/blob/main/alipay.jpg?raw=true" alt="Alipay QRcode" width="200"><br>
-      <h6>🍔来个汉堡</h6>
-    </td>
-  </tr>
-</table>

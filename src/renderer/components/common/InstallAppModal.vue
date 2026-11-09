@@ -31,7 +31,7 @@
           <a
             class="text-green-500"
             target="_blank"
-            href="https://github.com/algerkong/AlgerMusicPlayer/releases"
+            href="https://github.com/aweicjnb/AlgerMusic/releases"
             >GitHub</a
           >
           {{ t('comp.installApp.downloadProblemLinkText') }}
@@ -76,7 +76,7 @@ onMounted(async () => {
 });
 
 const handleInstall = async (): Promise<void> => {
-  window.open('http://donate.alger.fun/download', '_blank');
+  window.open('https://github.com/aweicjnb/AlgerMusic/releases/latest', '_blank');
 };
 </script>
 

@@ -56,7 +56,7 @@ jobs:
 
       - name: Read upstream release notes
         run: |
-          NOTES=$(awk "/## \[v${{ env.VERSION }}\]/{p=1;print;next} /## \[v/{p=0}p" CHANGELOG.md)
+          NOTES=$(awk "/^## \[?v${{ env.VERSION }}\]?/{p=1;print;next} /^## /{p=0}p" CHANGELOG.md)
           echo "NOTES<<EOF" >> $GITHUB_ENV
           echo "$NOTES" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
@@ -71,12 +71,14 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body: |
-            基于 [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer) v${{ env.VERSION }} 的个人定制版，仅 Windows x64。
+            基于 [AlgerMusicPlayer](https://github.com/algerkong/AlgerMusicPlayer) v5.1.0 的个人定制版，仅 Windows x64。
 
             - 应用图标换成小猫咪
             - 主界面壁纸，可调界面透明度、夜间模式亮度（标题栏右上角调色板按钮）
-            - 去掉百度统计
+            - 全屏歌词动画，共 7 种样式（魔法棒按钮切换，来自 Folia），可跟随字体设置
+            - 去掉百度统计、打赏和作者引流内容
             - 自动更新改为从本仓库获取
+            - 按 GNU AGPL v3.0 发布，源码见本仓库
 
             下载 `AlgerMusicPlayer-${{ env.VERSION }}-win-x64.exe` 安装即可。
 
