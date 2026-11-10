@@ -4,6 +4,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { playbackErrorFields } from '../shared/playbackLog';
+import { writePlaybackLog } from './modules/playbackLog';
 import { type Platform, unblockMusic } from './unblockMusic';
 
 // 必须在 import netease-cloud-music-api-alger 之前创建 anonymous_token 文件
@@ -49,6 +51,7 @@ async function startMusicApi(): Promise<void> {
   const settings = store.get('set') as any;
   let port = settings?.musicApiPort || 30488;
   const maxRetries = 10;
+  writePlaybackLog('music-api.starting', { port });
 
   // 检查端口是否可用，如果不可用则尝试下一个端口
   for (let i = 0; i < maxRetries; i++) {
@@ -69,13 +72,20 @@ async function startMusicApi(): Promise<void> {
 
   try {
     const server = require('netease-cloud-music-api-alger/server');
-    await server.serveNcmApi({
+    const api = await server.serveNcmApi({
       port,
       // 安全默认值：仅监听本机回环地址，避免对局域网暴露
       host: '127.0.0.1'
     });
     console.log(`MUSIC API STARTED on port ${port}`);
+    const logListening = () => writePlaybackLog('music-api.ready', { port });
+    if (api.server.listening) {
+      logListening();
+    } else {
+      api.server.once('listening', logListening);
+    }
   } catch (error) {
+    writePlaybackLog('music-api.failed', { port, ...playbackErrorFields(error) });
     console.error(`MUSIC API 启动失败:`, error);
     throw error;
   }

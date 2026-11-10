@@ -63,10 +63,17 @@
               :key="option.value"
               class="folia-style-item"
               :class="{ active: foliaStyle === option.value }"
+              :title="option.value === 'auto' ? automaticStyleDetails : undefined"
               @click="selectFoliaStyle(option.value)"
             >
               <span class="folia-style-name">{{ option.label }}</span>
-              <span class="folia-style-desc">{{ option.description }}</span>
+              <span class="folia-style-desc">
+                {{
+                  option.value === 'auto'
+                    ? (automaticStyleDescription ?? option.description)
+                    : option.description
+                }}
+              </span>
             </div>
           </div>
         </n-popover>
@@ -225,6 +232,8 @@ import LyricCorrectionControl from '@/components/lyric/LyricCorrectionControl.vu
 import FoliaLyricStage from '@/components/lyric/FoliaLyricStage.vue';
 import LyricSettings from '@/components/lyric/LyricSettings.vue';
 import SimplePlayBar from '@/components/player/SimplePlayBar.vue';
+import { matchLyricStyle, type LyricStyleChoice } from '@/folia/lyricStyleMatch';
+import { FOLIA_STYLES, type FoliaStyle } from '@/folia/styles';
 import {
   adjustCorrectionTime,
   artistList,
@@ -237,7 +246,6 @@ import {
   textColors,
   useLyricProgress
 } from '@/hooks/MusicHook';
-import { FOLIA_STYLES, type FoliaStyle } from '@/folia/styles';
 import { useArtist } from '@/hooks/useArtist';
 import { usePlayerStore } from '@/store/modules/player';
 import { useSettingsStore } from '@/store/modules/settings';
@@ -354,13 +362,15 @@ const isVisible = computed({
   get: () => props.modelValue,
   set: (value) => emit('update:modelValue', value)
 });
+const playerStore = usePlayerStore();
 
 // 歌词动画样式，'off' 表示用原来的歌词界面；只在有带时间的歌词时生效
 const FOLIA_STYLE_STORAGE_KEY = 'folia-stage-style';
 const LEGACY_FOLIA_STORAGE_KEY = 'folia-stage-enabled';
-type FoliaStyleOption = FoliaStyle | 'off';
+type FoliaStyleOption = FoliaStyle | 'off' | 'auto';
 const foliaMenuOptions: { value: FoliaStyleOption; label: string; description: string }[] = [
   { value: 'off', label: '关闭', description: '使用原来的歌词界面' },
+  { value: 'auto', label: '自动切换', description: '按歌词情绪和主题匹配' },
   ...FOLIA_STYLES
 ];
 const readFoliaStyle = (): FoliaStyleOption => {
@@ -369,11 +379,50 @@ const readFoliaStyle = (): FoliaStyleOption => {
   return localStorage.getItem(LEGACY_FOLIA_STORAGE_KEY) === '1' ? 'fume' : 'off';
 };
 const foliaStyle = ref<FoliaStyleOption>(readFoliaStyle());
+const automaticChoice = ref<LyricStyleChoice>();
+const automaticStyleDescription = computed(() => {
+  const choice = foliaStyle.value === 'auto' ? automaticChoice.value : undefined;
+  if (!choice) return;
+  const name = FOLIA_STYLES.find((style) => style.value === choice.style)?.label;
+  return ['当前', name, choice.matchedTags[0]].filter(Boolean).join(' · ');
+});
+const automaticStyleDetails = computed(() => {
+  const choice = foliaStyle.value === 'auto' ? automaticChoice.value : undefined;
+  if (!choice) return '按歌词情绪和主题匹配';
+  return choice.matchedTags.length
+    ? `歌词匹配 · ${choice.matchedTags.join('、')}`
+    : '歌词线索不足 · 随机选择';
+});
 const foliaMenuVisible = ref(false);
 const foliaEnabled = computed(() => foliaStyle.value !== 'off');
-const foliaStage = computed<FoliaStyle>(() =>
-  foliaStyle.value === 'off' ? 'fume' : foliaStyle.value
+const foliaStage = computed<FoliaStyle>(() => {
+  if (foliaStyle.value === 'auto') return automaticChoice.value?.style ?? 'fume';
+  return foliaStyle.value === 'off' ? 'fume' : foliaStyle.value;
+});
+
+let automaticSongId: string | number | undefined;
+watch(
+  [foliaStyle, () => playerStore.playMusic.id, () => playerStore.playMusic.lyric],
+  ([style, songId, lyric], [previousStyle]) => {
+    if (style !== 'auto') {
+      automaticSongId = undefined;
+      return;
+    }
+    if (!songId || !lyric || songId === automaticSongId) return;
+    if (typeof lyric !== 'string' && (!Array.isArray(lyric.lrcArray) || !lyric.lrcArray.length)) {
+      return;
+    }
+
+    const previous =
+      previousStyle && previousStyle !== 'off' && previousStyle !== 'auto'
+        ? previousStyle
+        : automaticChoice.value?.style;
+    automaticChoice.value = matchLyricStyle(lyric, previous);
+    automaticSongId = songId;
+  },
+  { immediate: true }
 );
+
 const selectFoliaStyle = (style: FoliaStyleOption) => {
   foliaStyle.value = style;
   foliaMenuVisible.value = false;
@@ -684,8 +733,6 @@ const handleScroll = () => {
   const { scrollTop } = lrcSider.value.$el;
   showStickyHeader.value = scrollTop > 100;
 };
-
-const playerStore = usePlayerStore();
 
 const closeMusicFull = () => {
   // 退出全屏模式
@@ -1130,7 +1177,9 @@ defineExpose({
 
 .folia-style-menu {
   @apply p-1.5 rounded-xl;
-  width: 220px;
+  width: min(260px, 90vw);
+  max-height: min(520px, 72vh);
+  overflow-y: auto;
   background: rgba(24, 24, 27, 0.96);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
 }

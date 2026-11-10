@@ -1,10 +1,12 @@
 import { Howl } from 'howler';
 
 import type { SongResult } from '@/types/music';
+import { logTrack } from '@/utils/playbackLog';
 
 class PreloadService {
   private loadingPromises: Map<string | number, Promise<Howl>> = new Map();
   private preloadedSounds: Map<string | number, Howl> = new Map();
+  private readonly loadedTracks = new WeakMap<Howl, ReturnType<typeof logTrack>>();
 
   /**
    * 加载并验证音频
@@ -58,7 +60,9 @@ class PreloadService {
     }
 
     // 创建初始音频实例
+    const loadedTrack = logTrack(song);
     const sound = await this._createSound(song.playMusicUrl);
+    this.loadedTracks.set(sound, loadedTrack);
 
     // 检查时长
     const duration = sound.duration();
@@ -90,6 +94,10 @@ class PreloadService {
     }
 
     return sound;
+  }
+
+  public getLoadedTrack(sound: Howl) {
+    return this.loadedTracks.get(sound);
   }
 
   private _createSound(url: string): Promise<Howl> {

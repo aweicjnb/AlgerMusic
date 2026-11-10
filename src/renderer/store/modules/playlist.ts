@@ -9,6 +9,7 @@ import { useSongDetail } from '@/hooks/usePlayerHooks';
 import { preloadService } from '@/services/preloadService';
 import type { SongResult } from '@/types/music';
 import { getImgUrl } from '@/utils';
+import { logPlayback, logTrack } from '@/utils/playbackLog';
 import { performShuffle, preloadCoverImage } from '@/utils/playerUtils';
 
 import { useIntelligenceModeStore } from './intelligenceMode';
@@ -615,6 +616,12 @@ export const usePlaylistStore = defineStore(
     const setPlay = async (song: SongResult) => {
       try {
         const playerCore = usePlayerCoreStore();
+        logPlayback('playlist.selection', {
+          requested: logTrack(song),
+          selected: logTrack(playerCore.playMusic),
+          playing: playerCore.play,
+          playListIndex: playListIndex.value
+        });
 
         // 检查URL是否已过期
         if (song.expiredAt && song.expiredAt < Date.now()) {
@@ -642,6 +649,11 @@ export const usePlaylistStore = defineStore(
             playerCore.userPlayIntent = true;
             const { audioService } = await import('@/services/audioService');
             const sound = audioService.getCurrentSound();
+            logPlayback('playlist.resume', {
+              selected: logTrack(playerCore.playMusic),
+              audioTrack: logTrack(audioService.getCurrentTrack()),
+              hasSound: Boolean(sound)
+            });
             if (sound) {
               sound.play();
               // 在恢复播放时也进行状态检测，防止URL已过期导致无声

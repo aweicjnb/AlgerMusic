@@ -5,6 +5,8 @@ import { lazy, Suspense, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import type { VisualizerSharedProps } from './components/visualizer/definition';
+import { DEFAULT_HANABI_TUNING } from './components/visualizer/hanabi/types';
+import { DEFAULT_MACHI_TUNING } from './components/visualizer/machi/types';
 import type { FoliaStyle } from './styles';
 import { DEFAULT_FUME_TUNING, type AudioBands, type FumeTuning, type Line, type Theme } from './types';
 
@@ -19,6 +21,20 @@ const VISUALIZERS: Record<FoliaStyle, React.LazyExoticComponent<React.ComponentT
     claddagh: lazy(() => import('./components/visualizer/claddagh/VisualizerCladdagh')),
     cadenza: lazy(() => import('./components/visualizer/cadenza/VisualizerCadenza')),
     still: lazy(() => import('./components/visualizer/still/VisualizerStill')),
+    sonnet: lazy(() => import('./components/visualizer/sonnet/VisualizerSonnet')),
+    hanabi: lazy(() => import('./components/visualizer/hanabi/VisualizerHanabi').then(({ default: Hanabi }) => ({
+        default: (props: VisualizerSharedProps) => <Hanabi {...props} hanabiTuning={DEFAULT_HANABI_TUNING} />,
+    }))),
+    monet: lazy(() => import('./components/visualizer/monet/VisualizerMonet')),
+    pendolo: lazy(() => import('./components/visualizer/pendolo/VisualizerPendolo')),
+    diorama: lazy(() => import('./components/visualizer/diorama/VisualizerDiorama')),
+    nebbia: lazy(() => import('./components/visualizer/nebbia/VisualizerNebbia')),
+    cappella: lazy(() => import('./components/visualizer/cappella/VisualizerCappella')),
+    lumiere: lazy(() => import('./components/visualizer/lumiere/VisualizerLumiere')),
+    tempera: lazy(() => import('./components/visualizer/tempera/VisualizerTempera')),
+    machi: lazy(() => import('./components/visualizer/machi/VisualizerMachi').then(({ default: Machi }) => ({
+        default: (props: VisualizerSharedProps) => <Machi {...props} machiTuning={DEFAULT_MACHI_TUNING} />,
+    }))),
 };
 
 // 关掉每个字点亮前落下的色块（print stamp）
@@ -30,6 +46,7 @@ export interface FoliaStageState {
     lines: Line[];
     lineIndex: number;
     theme: Theme;
+    song: Pick<VisualizerSharedProps, 'songTitle' | 'songArtist' | 'songAlbum' | 'coverUrl' | 'duration'>;
 }
 
 export interface FoliaStageHandle {
@@ -38,7 +55,11 @@ export interface FoliaStageHandle {
     unmount: () => void;
 }
 
-export const mountFoliaStage = (element: HTMLElement, initial: FoliaStageState): FoliaStageHandle => {
+export const mountFoliaStage = (
+    element: HTMLElement,
+    initial: FoliaStageState,
+    readSpectrum: (bins: Uint8Array<ArrayBuffer>) => number,
+): FoliaStageHandle => {
     let state = initial;
     const listeners = new Set<() => void>();
     const subscribe = (listener: () => void) => {
@@ -48,23 +69,59 @@ export const mountFoliaStage = (element: HTMLElement, initial: FoliaStageState):
     const getState = () => state;
 
     const currentTime = motionValue(0);
-    // 目前没有接音频频谱，“浮名”的文字不依赖它，只有背景图形会随音乐变化。
     const silent = (): MotionValue<number> => motionValue(0);
     const audioPower = silent();
+    const bins = new Uint8Array(1024);
+    const emptyBins = new Uint8Array(0);
+    const spectrum = motionValue(emptyBins);
     const audioBands: AudioBands = {
         bass: silent(),
         lowMid: silent(),
         mid: silent(),
         vocal: silent(),
         treble: silent(),
+        spectrum,
+    };
+    const bands = [
+        [20, 150, audioBands.bass],
+        [150, 400, audioBands.lowMid],
+        [400, 1200, audioBands.mid],
+        [1000, 3500, audioBands.vocal],
+        [3500, 10000, audioBands.treble],
+    ] as const;
+    // Keep the original seven styles' audio response as it was before the port.
+    const audioModes: ReadonlySet<FoliaStyle> = new Set([
+        'monet', 'diorama', 'lumiere', 'pendolo', 'sonnet', 'machi',
+    ]);
+
+    const updateAudio = () => {
+        const sampleRate = audioModes.has(state.mode) ? readSpectrum(bins) : 0;
+        if (!sampleRate) spectrum.set(emptyBins);
+        else if (spectrum.get() !== bins) spectrum.set(bins);
+
+        let energy = 0;
+        for (const [from, to, value] of bands) {
+            let average = 0;
+            if (sampleRate) {
+                const hzPerBin = sampleRate / (bins.length * 2);
+                const first = Math.floor(from / hzPerBin);
+                const end = Math.min(bins.length, Math.ceil(to / hzPerBin));
+                for (let index = first; index < end; index++) average += bins[index];
+                average /= Math.max(1, end - first);
+            }
+            value.set(average);
+            energy += average;
+        }
+        audioPower.set(energy / bands.length);
     };
 
     const Stage = () => {
-        const { mode, songKey, lines, lineIndex, theme } = useSyncExternalStore(subscribe, getState);
+        const { mode, songKey, lines, lineIndex, theme, song } = useSyncExternalStore(subscribe, getState);
         const Visualizer = VISUALIZERS[mode];
         return (
             <Suspense fallback={null}>
             <Visualizer
+                {...song}
                 key={`${mode}:${songKey}`}
                 currentTime={currentTime}
                 currentLineIndex={lineIndex}
@@ -89,7 +146,10 @@ export const mountFoliaStage = (element: HTMLElement, initial: FoliaStageState):
             state = { ...state, ...patch };
             listeners.forEach(listener => listener());
         },
-        setTime: seconds => currentTime.set(seconds),
+        setTime: (seconds) => {
+            updateAudio();
+            currentTime.set(seconds);
+        },
         unmount: () => root.unmount(),
     };
 };

@@ -3,7 +3,7 @@
 本目录下的代码取自 [Folia](https://github.com/chthollyphile/folia-major)（提交 `5bdade1`，版本 0.7.27），
 版权归 Folia 的作者和贡献者所有，按 **GNU Affero General Public License v3.0** 授权。
 
-目前包含浮名（fume）、流光（classic）、倾诉（tilt）、云阶（partita）、回环（claddagh）、心象（cadenza）、静止（still）七种歌词动画。目录结构和原项目 `src/` 保持一致，方便对照。
+已接入本版本的全部 17 种内置歌词样式。最早接入的是浮名（fume）、流光（classic）、倾诉（tilt）、云阶（partita）、回环（claddagh）、心象（cadenza）、静止（still）。后续接入的是商籁（sonnet）、花火（hanabi）、莫奈（monet）、时计（pendolo）、镜台（diorama）、雾笺（nebbia）、群唱（cappella）、绘光（lumiere）、凝彩（tempera）、町景（machi）。目录结构和原项目 `src/` 对齐，方便对照。
 
 ## 和原项目的差异
 
@@ -34,3 +34,19 @@
 新增（连接本播放器）：`mount.tsx`、`adapter.ts`、`styles.ts`、`i18n/useTranslation.ts`。
 
 后六种样式目录原样复制，只在 `.tsx` 首行加了 `@jsxImportSource react`，并把 `react-i18next` 换成 `i18n/useTranslation.ts`。部分文件加了 `@ts-nocheck`，因为本项目的类型检查比原项目严格。`GlowWord.tsx` 的波纹居中方式改用 framer-motion 的 `x`/`y`，原因同上面的 Tailwind 差异。
+
+## 后续接入的十种样式
+
+- 保留 Folia 的默认渲染配置和样式素材，包括群唱的内置头像与表情。PixiJS 和 Three.js 渲染器按需加载。
+- AlgerMusic 提供歌词、播放进度、歌曲元数据和封面。用当前音频输出的实时频谱驱动有相关效果的样式。Folia 的智能节拍、分轨分析、模组和专属设置页未接入。凝彩用默认图层，莫奈用歌曲封面，町景用默认镜头配置。
+- React JSX、翻译入口、类型和宿主接口按 AlgerMusic 调整。移除了依赖 Folia 设置或素材存储的界面接入代码。
+
+### 保留的上游注释
+
+本次新增文件中，以下路径含 Folia 源码的 `@ai-ignore` 注释，已按原文保留。路径相对于 `components/visualizer/`。
+
+- `cappella/cappellaBubbleMetrics.ts`
+- `diorama/VisualizerDiorama.tsx`
+- `monet/VisualizerMonet.tsx`
+- `sonnet/` 下的 `sonnetGlyphLayout.ts`、`sonnetMotion.ts`、`sonnetPostProcess.ts`、`sonnetProgram.ts`、`sonnetTypographyLayout.ts`
+- `tempera/` 下的 `createTemperaPixiRuntime.ts`、`temperaCamera.ts`、`temperaCreditsLayer.ts`、`temperaDepth.ts`、`temperaImageTextures.ts`、`temperaInkFlash.ts`、`temperaLayout.ts`、`temperaOverlay.ts`、`temperaProgram.ts`、`temperaSceneBuilder.ts`、`temperaSceneFilters.ts`、`temperaSceneFrame.ts`、`temperaShotFrame.ts`

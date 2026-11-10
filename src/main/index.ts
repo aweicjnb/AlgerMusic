@@ -13,6 +13,7 @@ import { initializeLocalMusicScanner } from './modules/localMusicScanner';
 import { initializeLoginWindow } from './modules/loginWindow';
 import { initLxMusicHttp } from './modules/lxMusicHttp';
 import { initializeOtherApi } from './modules/otherApi';
+import { initializePlaybackLog, writePlaybackLog } from './modules/playbackLog';
 import { initializeRemoteControl } from './modules/remoteControl';
 import { initializeShortcuts } from './modules/shortcuts';
 import { initializeTray, updateCurrentSong, updatePlayState, updateTrayMenu } from './modules/tray';
@@ -57,6 +58,9 @@ function initialize(configStore: any) {
 
   // 创建主窗口
   mainWindow = createMainWindow(icon);
+  mainWindow.webContents.on('render-process-gone', (_, details) => {
+    writePlaybackLog('app.renderer-exit', { reason: details.reason, exitCode: details.exitCode });
+  });
 
   // 初始化托盘
   initializeTray(iconPath, mainWindow);
@@ -116,6 +120,9 @@ if (!isSingleInstance) {
 
   // 应用程序准备就绪时的处理
   app.whenReady().then(() => {
+    initializePlaybackLog(() => mainWindow?.webContents);
+    writePlaybackLog('app.start', { version: app.getVersion(), platform: process.platform });
+
     // 设置应用ID
     electronApp.setAppUserModelId('com.alger.music');
 

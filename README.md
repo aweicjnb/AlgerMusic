@@ -4,7 +4,7 @@
 >
 > - 应用图标（程序、快捷方式、任务栏、托盘、侧边栏）换成小猫咪
 > - 主界面支持壁纸：点标题栏右上角的调色板按钮，可以更换壁纸、调整界面透明度和夜间模式亮度
-> - 全屏歌词动画：打开全屏歌词，点右上角魔法棒，有浮名、流光、倾诉、云阶、回环、心象、静止 7 种样式，可跟随“字体设置”（动画代码来自 [Folia](https://github.com/chthollyphile/folia-major)，见 [NOTICE](./src/renderer/folia/NOTICE.md)）
+> - 打开全屏歌词，点右上角魔法棒，可选 17 种动画样式。「自动切换」会按歌词的情绪和主题选择样式。动画跟随字体设置，代码来自 [Folia](https://github.com/chthollyphile/folia-major)，见 [移植说明](./src/renderer/folia/NOTICE.md)。
 > - 去掉百度统计、打赏和作者引流内容
 > - 自动更新改为从本仓库的 Releases 获取
 >

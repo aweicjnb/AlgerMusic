@@ -3,12 +3,15 @@ import { Howl, Howler } from 'howler';
 import type { AudioOutputDevice } from '@/types/audio';
 import type { SongResult } from '@/types/music';
 import { isElectron } from '@/utils'; // 导入isElectron常量
+import { audioSourceKind, logPlayback, logTrack, playbackErrorFields } from '@/utils/playbackLog';
 
 class AudioService {
   private currentSound: Howl | null = null;
   private pendingSound: Howl | null = null;
 
   private currentTrack: SongResult | null = null;
+  private readonly mediaLogListeners = new WeakMap<HTMLMediaElement, AbortController>();
+  private audioAttemptCount = 0;
 
   private context: AudioContext | null = null;
 
@@ -17,6 +20,7 @@ class AudioService {
   private source: MediaElementAudioSourceNode | null = null;
 
   private gainNode: GainNode | null = null;
+  private lyricAnalyser: AnalyserNode | null = null;
 
   private bypass = false;
 
@@ -256,6 +260,7 @@ class AudioService {
       if (this.gainNode) {
         this.gainNode.disconnect();
         this.gainNode = null;
+        this.lyricAnalyser = null;
       }
 
       // 如果不需要保持上下文，则关闭它
@@ -389,6 +394,7 @@ class AudioService {
       } catch {
         /* already disconnected */
       }
+      this.lyricAnalyser = null;
 
       if (this.bypass) {
         // EQ被禁用时，直接连接到输出
@@ -417,6 +423,27 @@ class AudioService {
         console.error('Fallback connection also failed:', fallbackError);
         this.emit('audio_error', { type: 'graph_disconnected', error: fallbackError });
       }
+    }
+  }
+
+  // Read the output through an analyser branch with no connection to the speakers.
+  readLyricSpectrum(bins: Uint8Array<ArrayBuffer>): number {
+    const gain = this.gainNode;
+    if (!gain || gain.context.state !== 'running') return 0;
+    if (!this.lyricAnalyser) {
+      const analyser = gain.context.createAnalyser();
+      analyser.fftSize = bins.length * 2;
+      gain.connect(analyser);
+      this.lyricAnalyser = analyser;
+    }
+    this.lyricAnalyser.getByteFrequencyData(bins);
+    return this.lyricAnalyser.context.sampleRate;
+  }
+
+  releaseLyricSpectrum(): void {
+    if (this.lyricAnalyser) {
+      this.gainNode?.disconnect(this.lyricAnalyser);
+      this.lyricAnalyser = null;
     }
   }
 
@@ -511,7 +538,8 @@ class AudioService {
     track: SongResult,
     isPlay: boolean = true,
     seekTime: number = 0,
-    existingSound?: Howl
+    existingSound?: Howl,
+    requestId?: string
   ): Promise<Howl> {
     // 如果没有提供新的 URL 和 track，且当前有音频实例，则继续播放当前音频
     if (this.currentSound && !url && !track) {
@@ -551,6 +579,7 @@ class AudioService {
     return new Promise<Howl>((resolve, reject) => {
       let retryCount = 0;
       const maxRetries = 1;
+      const requested = logTrack(track);
 
       // 如果有正在加载的 pendingSound，先清理掉
       if (this.pendingSound) {
@@ -560,6 +589,17 @@ class AudioService {
       }
 
       const tryPlay = async () => {
+        const audioAttempt = ++this.audioAttemptCount;
+        const logContext = { requestId, audioAttempt, requested };
+        logPlayback('audio.loading', {
+          ...logContext,
+          sourceKind: audioSourceKind(url),
+          reusedSound: Boolean(existingSound),
+          hotSwap: Boolean(isHotSwap),
+          shouldPlay: isPlay,
+          positionSeconds: seekTime,
+          retryCount
+        });
         try {
           console.log('audioService: 开始创建音频对象');
 
@@ -634,6 +674,42 @@ class AudioService {
             });
           }
 
+          const loadedSource = (newSound as Howl & { _src?: string })._src;
+          const node = (newSound as Howl & { _sounds?: { _node?: unknown }[] })._sounds?.[0]?._node;
+          const media = node instanceof HTMLMediaElement ? node : undefined;
+          const audioState = () => ({
+            ...logContext,
+            audioTrack: logTrack(this.currentTrack),
+            active: this.currentSound === newSound,
+            positionSeconds: media?.currentTime,
+            durationSeconds: media?.duration,
+            readyState: media?.readyState,
+            networkState: media?.networkState
+          });
+          if (media) {
+            this.mediaLogListeners.get(media)?.abort();
+            const controller = new AbortController();
+            this.mediaLogListeners.set(media, controller);
+            let bufferingSince: number | undefined;
+            const onMediaEvent = (event: Event) => {
+              if (this.currentSound !== newSound || newSound.state() === 'unloaded') return;
+              if (event.type === 'playing') {
+                if (bufferingSince === undefined) return;
+                logPlayback('audio.buffer-resumed', {
+                  ...audioState(),
+                  bufferingMs: Math.round(performance.now() - bufferingSince)
+                });
+                bufferingSince = undefined;
+              } else {
+                bufferingSince ??= performance.now();
+                logPlayback('audio.buffering', { ...audioState(), reason: event.type });
+              }
+            };
+            for (const event of ['waiting', 'stalled', 'playing']) {
+              media.addEventListener(event, onMediaEvent, { signal: controller.signal });
+            }
+          }
+
           // 统一设置事件处理
           const setupEvents = () => {
             newSound.off('loaderror');
@@ -641,6 +717,11 @@ class AudioService {
             newSound.off('load');
 
             newSound.on('loaderror', (_, error) => {
+              logPlayback('audio.load-error', {
+                ...audioState(),
+                mediaErrorCode: media?.error?.code,
+                ...playbackErrorFields(error)
+              });
               console.error('Audio load error:', error);
               this.emit('loaderror', { track, error });
               if (retryCount < maxRetries && !existingSound) {
@@ -657,6 +738,11 @@ class AudioService {
             });
 
             newSound.on('playerror', (_, error) => {
+              logPlayback('audio.play-error', {
+                ...audioState(),
+                mediaErrorCode: media?.error?.code,
+                ...playbackErrorFields(error)
+              });
               console.error('Audio play error:', error);
               this.emit('playerror', { track, error });
               if (retryCount < maxRetries) {
@@ -731,6 +817,13 @@ class AudioService {
                     }
 
                     console.log('audioService: 音频加载成功，设置 EQ');
+                    logPlayback('audio.ready', {
+                      ...audioState(),
+                      shouldPlay: isPlay,
+                      loadedSourceKind: audioSourceKind(loadedSource),
+                      sourceMatches: loadedSource ? loadedSource === url : undefined,
+                      expectedDurationSeconds: track.dt ? track.dt / 1000 : undefined
+                    });
                     this.updateMediaSessionMetadata(track);
                     this.updateMediaSessionPositionState();
                     this.emit('load');
@@ -745,11 +838,16 @@ class AudioService {
 
                     resolve(this.currentSound);
                   } catch (error) {
+                    logPlayback('audio.init-error', {
+                      ...audioState(),
+                      ...playbackErrorFields(error)
+                    });
                     console.error('Audio initialization failed:', error);
                     reject(error);
                   }
                 }
               } catch (error) {
+                logPlayback('audio.init-error', { ...audioState(), ...playbackErrorFields(error) });
                 console.error('Audio initialization failed:', error);
                 reject(error);
               }
@@ -781,6 +879,7 @@ class AudioService {
             soundInstance.off('seek');
 
             soundInstance.on('play', () => {
+              logPlayback('audio.play', audioState());
               if (this.currentSound === soundInstance) {
                 this.updateMediaSessionState(true);
                 this.emit('play');
@@ -788,6 +887,7 @@ class AudioService {
             });
 
             soundInstance.on('pause', () => {
+              logPlayback('audio.pause', audioState());
               if (this.currentSound === soundInstance) {
                 this.updateMediaSessionState(false);
                 this.emit('pause');
@@ -795,12 +895,14 @@ class AudioService {
             });
 
             soundInstance.on('end', () => {
+              logPlayback('audio.end', audioState());
               if (this.currentSound === soundInstance) {
                 this.emit('end');
               }
             });
 
             soundInstance.on('seek', () => {
+              logPlayback('audio.seek', audioState());
               if (this.currentSound === soundInstance) {
                 this.updateMediaSessionPositionState();
                 this.emit('seek');
@@ -808,6 +910,7 @@ class AudioService {
             });
           }
         } catch (error) {
+          logPlayback('audio.init-error', { ...logContext, ...playbackErrorFields(error) });
           console.error('Error creating audio instance:', error);
           this.releaseOperationLock();
           reject(error);

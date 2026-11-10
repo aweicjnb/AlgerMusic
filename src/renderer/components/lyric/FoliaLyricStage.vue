@@ -9,12 +9,14 @@ import { buildFoliaLines, buildFoliaTheme, findFoliaLineIndex } from '@/folia/ad
 import type { FoliaStageHandle } from '@/folia/mount';
 import type { FoliaStyle } from '@/folia/styles';
 import {
+  allTime,
   correctionTime,
   lrcArray,
   lrcTimeArray,
   nowTime,
   playMusic
 } from '@/hooks/MusicHook';
+import { audioService } from '@/services/audioService';
 import { usePlayerStore } from '@/store/modules/player';
 import { useSettingsStore } from '@/store/modules/settings';
 
@@ -29,6 +31,17 @@ const theme = computed(() =>
   buildFoliaTheme(playMusic.value?.primaryColor, settingsStore.setData.fontFamily)
 );
 const songKey = computed(() => playMusic.value?.id ?? 'none');
+const song = computed(() => {
+  const track = playMusic.value;
+  const artists = track?.ar?.length ? track.ar : track?.song?.artists;
+  return {
+    songTitle: track?.name,
+    songArtist: artists?.map((artist: { name: string }) => artist.name).join(' / '),
+    songAlbum: track?.al?.name || track?.album?.name || track?.song?.album?.name,
+    coverUrl: track?.picUrl || track?.al?.picUrl || track?.album?.picUrl,
+    duration: allTime.value
+  };
+});
 
 // 播放器的进度约每 50ms 更新一次，两次更新之间按真实时间补齐，动画才顺滑
 const MAX_EXTRAPOLATION_MS = 300;
@@ -65,7 +78,10 @@ const tick = () => {
 
 watch(
   () => props.mode,
-  (mode) => handle?.setState({ mode })
+  (mode) => {
+    audioService.releaseLyricSpectrum();
+    handle?.setState({ mode });
+  }
 );
 
 watch([lines, theme, songKey], () => {
@@ -77,19 +93,25 @@ watch([lines, theme, songKey], () => {
     lineIndex
   });
 });
+watch(song, (value) => handle?.setState({ song: value }));
 
 onMounted(async () => {
   document.documentElement.classList.add('folia-stage');
   // React 和动画代码体积较大，用到时才加载
   const { mountFoliaStage } = await import('@/folia/mount');
   if (disposed || !hostRef.value) return;
-  handle = mountFoliaStage(hostRef.value, {
-    mode: props.mode,
-    lines: lines.value,
-    theme: theme.value,
-    songKey: songKey.value,
-    lineIndex
-  });
+  handle = mountFoliaStage(
+    hostRef.value,
+    {
+      mode: props.mode,
+      lines: lines.value,
+      theme: theme.value,
+      songKey: songKey.value,
+      lineIndex,
+      song: song.value
+    },
+    (bins) => (playerStore.isPlay ? audioService.readLyricSpectrum(bins) : 0)
+  );
   frameId = requestAnimationFrame(tick);
 });
 
@@ -98,6 +120,7 @@ onBeforeUnmount(() => {
   disposed = true;
   stopTimeWatch();
   cancelAnimationFrame(frameId);
+  audioService.releaseLyricSpectrum();
   handle?.unmount();
   handle = null;
 });

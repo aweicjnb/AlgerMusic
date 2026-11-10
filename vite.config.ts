@@ -11,6 +11,9 @@ export default defineConfig({
   base: './',
   // 项目src
   root: resolve('src/renderer'),
+  esbuild: { jsx: 'automatic' },
+  // The renderer uses top-level await to open its IndexedDB stores.
+  build: { target: 'es2022' },
   resolve: {
     alias: {
       '@': resolve('src/renderer'),
@@ -23,6 +26,7 @@ export default defineConfig({
     viteCompression(),
     VueDevTools(),
     AutoImport({
+      exclude: [/[/\\]node_modules[/\\]/, /[/\\]\.git[/\\]/, /[/\\]renderer[/\\]folia[/\\]/],
       imports: [
         'vue',
         {

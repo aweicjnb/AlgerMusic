@@ -8,6 +8,7 @@ import type { usePlayerStore } from '@/store';
 import type { Artist, ILyricText, SongResult } from '@/types/music';
 import { isElectron } from '@/utils';
 import { getTextColors } from '@/utils/linearColor';
+import { logPlayback, logTrack, playbackErrorFields } from '@/utils/playbackLog';
 import { parseLyrics } from '@/utils/yrcParser';
 
 const windowData = window as any;
@@ -470,6 +471,12 @@ const setupAudioListeners = () => {
   audioService.on('end', async () => {
     console.log('音频播放结束事件触发');
     clearInterval();
+    logPlayback('playback.ended', {
+      selected: logTrack(getPlayerStore().playMusic),
+      audioTrack: logTrack(audioService.getCurrentTrack()),
+      playMode: getPlayerStore().playMode,
+      fm: getPlayerStore().isFmPlaying
+    });
 
     if (getPlayerStore().playMode === 1) {
       // 单曲循环模式
@@ -1013,10 +1020,18 @@ audioService.on('url_expired', async (expiredTrack) => {
     urlRecovery = { id: expiredTrack.id, count: 0, startedAt: now };
   }
   urlRecovery.count += 1;
+  const recovery = {
+    requested: logTrack(expiredTrack),
+    selected: logTrack(getPlayerStore().playMusic),
+    audioTrack: logTrack(audioService.getCurrentTrack()),
+    positionSeconds: nowTime.value,
+    attempt: urlRecovery.count
+  };
 
   if (urlRecovery.count > URL_RECOVERY_MAX_ATTEMPTS) {
     // 只在刚超过上限时提示一次，之后同一首歌的失败事件直接忽略
     if (urlRecovery.count === URL_RECOVERY_MAX_ATTEMPTS + 1) {
+      logPlayback('playback.recovery-limit', recovery);
       getPlayerStore().setPlayMusic(false);
       message.error('这首歌暂时无法播放，请换一首试试');
     }
@@ -1035,13 +1050,20 @@ audioService.on('url_expired', async (expiredTrack) => {
     };
 
     const shouldPlay = getPlayerStore().play;
-    const recovered = await getPlayerStore().handlePlayMusic(trackToPlay, shouldPlay);
+    logPlayback('playback.recovery', { ...recovery, shouldPlay });
+    const recovered = await getPlayerStore().handlePlayMusic(
+      trackToPlay,
+      shouldPlay,
+      'source-recovery'
+    );
+    logPlayback('playback.recovery-result', { ...recovery, recovered });
 
     // 只有真的恢复并且在播放时才提示
     if (recovered && shouldPlay) {
       message.success('已自动恢复播放');
     }
   } catch (error) {
+    logPlayback('playback.recovery-failed', { ...recovery, ...playbackErrorFields(error) });
     console.error('处理URL过期事件失败:', error);
     message.error('恢复播放失败，请手动点击播放');
   }

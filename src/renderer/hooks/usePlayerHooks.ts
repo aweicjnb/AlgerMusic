@@ -8,6 +8,7 @@ import { SongSourceConfigManager } from '@/services/SongSourceConfigManager';
 import type { ILyric, ILyricText, IWordData, SongResult } from '@/types/music';
 import { getImgUrl, isElectron } from '@/utils';
 import { getImageLinearBackground } from '@/utils/linearColor';
+import { logPlayback, playbackErrorFields } from '@/utils/playbackLog';
 import { parseLyrics as parseYrcLyrics } from '@/utils/yrcParser';
 
 const { message } = createDiscreteApi(['message']);
@@ -67,6 +68,9 @@ export const getSongUrl = async (
   requestId?: string
 ) => {
   const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+  const logSource = (route: string, reason?: string) => {
+    if (requestId) logPlayback('source.route', { requestId, route, reason });
+  };
 
   // 动态导入 settingsStore
   const { useSettingsStore } = await import('@/store/modules/settings');
@@ -115,13 +119,22 @@ export const getSongUrl = async (
           customResult.data.data.url
         ) {
           console.log('自定义API解析成功！');
+          logSource('custom');
           if (isDownloaded) return customResult.data.data as any;
           return await resolveCachedPlaybackUrl(customResult.data.data.url, songData);
         } else {
+          logSource('custom', 'no-url');
           console.log('自定义API解析失败，将使用默认降级流程...');
           message.warning(i18n.global.t('player.reparse.customApiFailed'));
         }
       } catch (error) {
+        if (requestId) {
+          logPlayback('source.error', {
+            requestId,
+            route: 'custom',
+            ...playbackErrorFields(error)
+          });
+        }
         console.error('调用自定义API时发生错误:', error);
         if ((error as Error).message === 'Request cancelled') {
           throw error;
@@ -144,8 +157,10 @@ export const getSongUrl = async (
         }
 
         if (res && res.data && res.data.data && res.data.data.url) {
+          logSource('configured');
           return await resolveCachedPlaybackUrl(res.data.data.url, songData);
         }
+        logSource('configured', 'no-url');
         console.warn('自定义音源解析失败，使用默认音源');
       } catch (error) {
         console.error('error', error);
@@ -171,6 +186,7 @@ export const getSongUrl = async (
       const isTrial = !!songDetail.freeTrialInfo;
 
       if (hasNoUrl || isTrial) {
+        logSource('fallback', hasNoUrl ? 'official-no-url' : 'official-trial');
         console.log(`官方URL无效 (无URL: ${hasNoUrl}, 试听: ${isTrial})，进入内置备用解析...`);
         const res = await getParsingMusicUrl(numericId, cloneDeep(songData));
         // 验证请求
@@ -184,11 +200,13 @@ export const getSongUrl = async (
       }
 
       console.log('官方API解析成功！');
+      logSource('official');
       if (isDownloaded) return songDetail as any;
       return await resolveCachedPlaybackUrl(songDetail.url, songData);
     }
 
     console.log('官方API返回数据结构异常，进入内置备用解析...');
+    logSource('fallback', 'official-empty-response');
     const res = await getParsingMusicUrl(numericId, cloneDeep(songData));
     // 验证请求
     if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
@@ -203,6 +221,10 @@ export const getSongUrl = async (
       throw error;
     }
     console.error('官方API请求失败，进入内置备用解析流程:', error);
+    if (requestId) {
+      logPlayback('source.error', { requestId, route: 'official', ...playbackErrorFields(error) });
+    }
+    logSource('fallback', 'official-error');
     const res = await getParsingMusicUrl(numericId, cloneDeep(songData));
     if (isDownloaded) return res?.data?.data as any;
     const parsedUrl = res?.data?.data?.url || null;
