@@ -18,7 +18,7 @@
     </div>
 
     <!-- Loading Skeleton -->
-    <div v-if="loading" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
+    <div v-if="loading" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-6">
       <div v-for="i in displayCount" :key="i" class="space-y-3">
         <div class="aspect-square skeleton-shimmer rounded-2xl" />
         <div class="h-4 w-3/4 skeleton-shimmer rounded-lg" />
@@ -29,7 +29,7 @@
     <!-- Album Grid -->
     <div
       v-else-if="displayAlbums.length > 0"
-      class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6"
+      class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-6"
     >
       <home-list-item
         v-for="(album, index) in displayAlbums"

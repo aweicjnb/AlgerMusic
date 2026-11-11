@@ -3,9 +3,15 @@
     <!-- menu -->
     <div class="app-menu" :class="{ 'app-menu-expanded': settingsStore.setData.isMenuExpanded }">
       <div class="app-menu-header">
-        <div class="app-menu-logo" @click="toggleMenu">
+        <button
+          type="button"
+          class="app-menu-logo"
+          :aria-label="settingsStore.setData.isMenuExpanded ? '收起导航' : '展开导航'"
+          :aria-expanded="Boolean(settingsStore.setData.isMenuExpanded)"
+          @click="toggleMenu"
+        >
           <img :src="icon" class="w-9 h-9" alt="logo" />
-        </div>
+        </button>
       </div>
       <div class="app-menu-list">
         <div v-for="(item, index) in menus" :key="item.path" class="app-menu-item">
@@ -15,7 +21,11 @@
             placement="bottom"
           >
             <template #trigger>
-              <router-link class="app-menu-item-link" :to="item.path">
+              <router-link
+                class="app-menu-item-link"
+                :to="item.path"
+                :aria-label="t(item.meta.title)"
+              >
                 <i
                   class="iconfont app-menu-item-icon"
                   :style="iconStyle(index)"
@@ -99,6 +109,12 @@ const toggleMenu = () => {
 <style lang="scss" scoped>
 .app-menu {
   @apply flex-col items-center justify-center transition-all duration-300 w-[100px] px-1;
+}
+
+.app-menu-logo {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
 }
 
 .app-menu-list {

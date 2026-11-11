@@ -3,7 +3,7 @@
     <!-- ── LEFT: Tabs（搜索展开时隐藏）─────────────── -->
     <transition name="tab-slide">
       <div
-        v-if="!isSearchExpanded && !showBackButton"
+        v-if="!isSearchExpanded && !showBackButton && !settingsStore.setData.isMenuExpanded"
         class="tabs-track flex-shrink-0"
         ref="tabsTrackRef"
       >
@@ -743,10 +743,16 @@ onMounted(() => {
 }
 
 .login-label {
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: #6b7280;
   padding: 0 8px;
+}
+@media (max-width: 1023px) {
+  .tabs-track {
+    display: none;
+  }
 }
 .dark .login-label {
   color: #9ca3af;

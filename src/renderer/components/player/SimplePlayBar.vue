@@ -99,7 +99,7 @@ const playerStore = usePlayerStore();
 const playBarRef = ref<HTMLElement | null>(null);
 
 // 播放状态
-const play = computed(() => playerStore.isPlay);
+const play = computed(() => playerStore.play);
 
 // 播放模式
 const { playMode, playModeIcon, togglePlayMode } = usePlayMode();

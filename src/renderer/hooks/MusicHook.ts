@@ -3,7 +3,8 @@ import { createDiscreteApi } from 'naive-ui';
 import { computed, type ComputedRef, nextTick, onUnmounted, ref, watch } from 'vue';
 
 import useIndexedDB from '@/hooks/IndexDBHook';
-import { audioService } from '@/services/audioService';
+import { type AudioRecoveryTrigger, audioService } from '@/services/audioService';
+import { playbackRequestManager } from '@/services/playbackRequestManager';
 import type { usePlayerStore } from '@/store';
 import type { Artist, ILyricText, SongResult } from '@/types/music';
 import { isElectron } from '@/utils';
@@ -231,6 +232,8 @@ const setupAudioListeners = () => {
   let recoveryTimer: number | null = null;
   let lyricThrottleCounter = 0;
   let lastSavedProgress = 0;
+  let lastProgressErrorAt = -Infinity;
+  let lastSeekAt = -Infinity;
 
   const clearInterval = () => {
     if (interval) {
@@ -252,6 +255,10 @@ const setupAudioListeners = () => {
    */
   const startProgressInterval = () => {
     clearInterval();
+    let observedSound: Howl | null = null;
+    let observedPosition = 0;
+    let positionChangedAt = performance.now();
+    let reportedStall = false;
     interval = window.setInterval(() => {
       try {
         // 每次从 audioService 获取最新的 sound 引用，而不是依赖闭包中的 sound.value
@@ -270,6 +277,54 @@ const setupAudioListeners = () => {
         if (typeof currentTime !== 'number' || Number.isNaN(currentTime)) {
           // 无效时间，跳过本次更新
           return;
+        }
+
+        const checkedAt = performance.now();
+        if (currentSound !== observedSound || Math.abs(currentTime - observedPosition) >= 0.05) {
+          if (
+            currentSound === observedSound &&
+            currentTime < observedPosition - 2 &&
+            checkedAt - lastSeekAt >= 250 &&
+            currentSound.state() === 'loaded'
+          ) {
+            const audio = audioService.getPlaybackDiagnostics(currentSound);
+            const currentRequestId = playbackRequestManager.getCurrentRequestId();
+            if (
+              (!audio.audioRequestId || audio.audioRequestId === currentRequestId) &&
+              !audio.mediaSeeking
+            ) {
+              logPlayback('playback.position-rewound', {
+                ...audio,
+                currentRequestId,
+                previousPositionSeconds: observedPosition,
+                displayedPositionSeconds: nowTime.value,
+                positionSeconds: currentTime
+              });
+            }
+          }
+          if (reportedStall && currentSound === observedSound) {
+            logPlayback('playback.progress-resumed', {
+              ...audioService.getPlaybackDiagnostics(currentSound),
+              previousPositionSeconds: observedPosition,
+              stalledMs: Math.round(checkedAt - positionChangedAt)
+            });
+          }
+          observedSound = currentSound;
+          observedPosition = currentTime;
+          positionChangedAt = checkedAt;
+          reportedStall = false;
+        } else if (!reportedStall && checkedAt - positionChangedAt >= 3_000) {
+          const audio = audioService.getPlaybackDiagnostics(currentSound);
+          if (getPlayerStore().play && audio.mediaPaused === false && !audio.mediaEnded) {
+            reportedStall = true;
+            logPlayback('playback.progress-stalled', {
+              ...audio,
+              displayedPositionSeconds: nowTime.value,
+              stalledMs: Math.round(checkedAt - positionChangedAt)
+            });
+          } else {
+            positionChangedAt = checkedAt;
+          }
         }
 
         // 同步 sound.value 引用（确保外部也能拿到最新的）
@@ -318,6 +373,9 @@ const setupAudioListeners = () => {
 
         // === localStorage 进度保存（每 ~2 秒）===
         if (
+          getPlayerStore().isPlay &&
+          currentSound.playing() &&
+          audioService.getCurrentTrack()?.id === getPlayerStore().playMusic?.id &&
           Math.floor(currentTime) % 2 === 0 &&
           Math.floor(currentTime) !== Math.floor(lastSavedProgress)
         ) {
@@ -333,6 +391,11 @@ const setupAudioListeners = () => {
           }
         }
       } catch (error) {
+        const checkedAt = performance.now();
+        if (checkedAt - lastProgressErrorAt >= 30_000) {
+          lastProgressErrorAt = checkedAt;
+          logPlayback('playback.progress-error', playbackErrorFields(error));
+        }
         console.error('进度更新 interval 出错:', error);
         // 出错时不清除 interval，让下一次 tick 继续尝试
       }
@@ -352,6 +415,10 @@ const setupAudioListeners = () => {
           const currentSound = audioService.getCurrentSound();
           if (currentSound && currentSound.playing()) {
             console.warn('[MusicHook] 检测到播放中但 interval 丢失，自动恢复');
+            logPlayback(
+              'playback.progress-monitor-restarted',
+              audioService.getPlaybackDiagnostics(currentSound)
+            );
             startProgressInterval();
           }
         }
@@ -366,12 +433,14 @@ const setupAudioListeners = () => {
 
   // 监听seek开始事件，立即更新UI
   audioService.on('seek_start', (time) => {
+    lastSeekAt = performance.now();
     // 直接更新显示位置，不检查拖动状态
     nowTime.value = time;
   });
 
   // 监听seek完成事件
   audioService.on('seek', () => {
+    lastSeekAt = performance.now();
     try {
       const currentSound = audioService.getCurrentSound();
       if (currentSound) {
@@ -417,7 +486,7 @@ const setupAudioListeners = () => {
 
   // 监听播放
   audioService.on('play', () => {
-    getPlayerStore().setPlayMusic(true);
+    getPlayerStore().onAudioPlaying();
     if (isElectron) {
       window.api.sendSong(cloneDeep(getPlayerStore().playMusic));
     }
@@ -428,7 +497,22 @@ const setupAudioListeners = () => {
   // 监听暂停
   audioService.on('pause', () => {
     console.log('音频暂停事件触发');
-    getPlayerStore().setPlayMusic(false);
+    const currentSound = audioService.getCurrentSound();
+    const selected = getPlayerStore().playMusic;
+    const position = currentSound?.seek();
+    if (
+      selected?.id != null &&
+      audioService.getCurrentTrack()?.id === selected.id &&
+      typeof position === 'number' &&
+      Number.isFinite(position) &&
+      position >= 0
+    ) {
+      localStorage.setItem(
+        'playProgress',
+        JSON.stringify({ songId: selected.id, progress: position })
+      );
+    }
+    getPlayerStore().onAudioPaused();
     clearInterval();
     if (isElectron && isLyricWindowOpen.value) {
       sendLyricToWin();
@@ -438,6 +522,11 @@ const setupAudioListeners = () => {
   const replayMusic = async (retryCount: number = 0) => {
     const MAX_REPLAY_RETRIES = 3;
     try {
+      logPlayback('playback.loop', {
+        ...audioService.getPlaybackDiagnostics(),
+        selected: logTrack(getPlayerStore().playMusic),
+        retryCount
+      });
       // 如果当前有音频实例，先停止并销毁
       const currentSound = audioService.getCurrentSound();
       if (currentSound) {
@@ -448,6 +537,7 @@ const setupAudioListeners = () => {
 
       // 重新播放当前歌曲
       if (getPlayerStore().playMusicUrl && playMusic.value) {
+        getPlayerStore().setPlayMusic(true);
         const newSound = await audioService.play(getPlayerStore().playMusicUrl, playMusic.value);
         sound.value = newSound as Howl;
         setupAudioListeners();
@@ -456,6 +546,11 @@ const setupAudioListeners = () => {
         getPlayerStore().nextPlay();
       }
     } catch (error) {
+      logPlayback('playback.loop-failed', {
+        ...audioService.getPlaybackDiagnostics(),
+        retryCount,
+        ...playbackErrorFields(error)
+      });
       console.error('单曲循环重播失败:', error);
       if (retryCount < MAX_REPLAY_RETRIES) {
         console.log(`单曲循环重试 ${retryCount + 1}/${MAX_REPLAY_RETRIES}`);
@@ -470,10 +565,12 @@ const setupAudioListeners = () => {
   // 监听结束
   audioService.on('end', async () => {
     console.log('音频播放结束事件触发');
+    getPlayerStore().onAudioPaused();
     clearInterval();
     logPlayback('playback.ended', {
+      ...audioService.getPlaybackDiagnostics(),
       selected: logTrack(getPlayerStore().playMusic),
-      audioTrack: logTrack(audioService.getCurrentTrack()),
+      displayedPositionSeconds: nowTime.value,
       playMode: getPlayerStore().playMode,
       fm: getPlayerStore().isFmPlaying
     });
@@ -944,36 +1041,8 @@ if (isElectron) {
 // 在组件挂载时设置监听器
 export const initAudioListeners = async () => {
   try {
-    // 确保有正在播放的音乐
-    if (!getPlayerStore().playMusic || !getPlayerStore().playMusic.id) {
-      console.log('没有正在播放的音乐，跳过音频监听器初始化');
-      return;
-    }
-
-    // 确保有音频实例
-    const initialSound = audioService.getCurrentSound();
-    if (!initialSound) {
-      console.log('没有音频实例，等待音频加载...');
-      // 等待音频加载完成
-      await new Promise<void>((resolve) => {
-        const checkInterval = setInterval(() => {
-          const sound = audioService.getCurrentSound();
-          if (sound) {
-            clearInterval(checkInterval);
-            resolve();
-          }
-        }, 100);
-
-        // 设置超时
-        setTimeout(() => {
-          clearInterval(checkInterval);
-          console.log('等待音频加载超时');
-          resolve();
-        }, 5000);
-      });
-    }
-
-    // 初始化音频监听器
+    if (audioListenersInitialized) return;
+    // 在加载任何音频前注册，确保启动自动播放的首个 play 事件也能收到。
     setupAudioListeners();
 
     // 监听歌词窗口事件
@@ -1012,8 +1081,23 @@ let urlRecovery: { id: SongResult['id'] | undefined; count: number; startedAt: n
   startedAt: 0
 };
 
-audioService.on('url_expired', async (expiredTrack) => {
+audioService.on('url_expired', async (expiredTrack: SongResult, trigger?: AudioRecoveryTrigger) => {
   if (!expiredTrack) return;
+
+  const currentRequestId = playbackRequestManager.getCurrentRequestId();
+  if (
+    getPlayerStore().playMusic?.id !== expiredTrack.id ||
+    (trigger?.requestId && trigger.requestId !== currentRequestId)
+  ) {
+    logPlayback('playback.recovery-skipped', {
+      requested: logTrack(expiredTrack),
+      selected: logTrack(getPlayerStore().playMusic),
+      parentRequestId: trigger?.requestId,
+      currentRequestId,
+      reason: 'superseded'
+    });
+    return;
+  }
 
   const now = Date.now();
   if (urlRecovery.id !== expiredTrack.id || now - urlRecovery.startedAt > URL_RECOVERY_WINDOW_MS) {
@@ -1021,10 +1105,19 @@ audioService.on('url_expired', async (expiredTrack) => {
   }
   urlRecovery.count += 1;
   const recovery = {
+    parentRequestId: trigger?.requestId,
+    parentAudioAttempt: trigger?.audioAttempt,
+    currentRequestId: playbackRequestManager.getCurrentRequestId(),
     requested: logTrack(expiredTrack),
     selected: logTrack(getPlayerStore().playMusic),
     audioTrack: logTrack(audioService.getCurrentTrack()),
-    positionSeconds: nowTime.value,
+    positionSeconds:
+      typeof trigger?.positionSeconds === 'number' && trigger.positionSeconds > 0
+        ? trigger.positionSeconds
+        : nowTime.value,
+    mediaPositionSeconds: trigger?.positionSeconds,
+    sourceKind: trigger?.sourceKind,
+    reason: trigger?.reason,
     attempt: urlRecovery.count
   };
 
@@ -1051,19 +1144,45 @@ audioService.on('url_expired', async (expiredTrack) => {
 
     const shouldPlay = getPlayerStore().play;
     logPlayback('playback.recovery', { ...recovery, shouldPlay });
-    const recovered = await getPlayerStore().handlePlayMusic(
+    const pendingRecovery = getPlayerStore().handlePlayMusic(
       trackToPlay,
       shouldPlay,
-      'source-recovery'
+      'source-recovery',
+      {
+        parentRequestId: trigger?.requestId,
+        parentAudioAttempt: trigger?.audioAttempt,
+        recoveryPositionSeconds: recovery.positionSeconds
+      }
     );
-    logPlayback('playback.recovery-result', { ...recovery, recovered });
+    const requestId = playbackRequestManager.getCurrentRequestId();
+    const recovered = await pendingRecovery;
+    const after = audioService.getPlaybackDiagnostics();
+    const matchedRecovery = recovered && after.audioRequestId === requestId;
+    logPlayback('playback.recovery-result', {
+      ...recovery,
+      requestId,
+      currentRequestId: playbackRequestManager.getCurrentRequestId(),
+      recovered,
+      shouldPlay,
+      elapsedMs: Date.now() - now,
+      audioRequestId: after.audioRequestId,
+      audioAttempt: after.audioAttempt,
+      actualPositionSeconds: matchedRecovery ? after.positionSeconds : undefined,
+      actualSourceKind: matchedRecovery ? after.audioSourceKind : undefined,
+      mediaPaused: matchedRecovery ? after.mediaPaused : undefined
+    });
 
     // 只有真的恢复并且在播放时才提示
     if (recovered && shouldPlay) {
       message.success('已自动恢复播放');
     }
   } catch (error) {
-    logPlayback('playback.recovery-failed', { ...recovery, ...playbackErrorFields(error) });
+    logPlayback('playback.recovery-failed', {
+      ...recovery,
+      currentRequestId: playbackRequestManager.getCurrentRequestId(),
+      elapsedMs: Date.now() - now,
+      ...playbackErrorFields(error)
+    });
     console.error('处理URL过期事件失败:', error);
     message.error('恢复播放失败，请手动点击播放');
   }

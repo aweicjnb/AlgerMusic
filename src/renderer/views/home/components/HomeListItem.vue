@@ -77,7 +77,7 @@
     <!-- Info -->
     <div class="mt-3 px-0.5">
       <h3
-        class="truncate text-base font-bold tracking-tight text-neutral-900 transition-colors duration-200 group-hover:text-primary dark:text-neutral-50 dark:group-hover:text-white"
+        class="line-clamp-2 min-h-12 text-base font-bold tracking-tight text-neutral-900 transition-colors duration-200 group-hover:text-primary dark:text-neutral-50 dark:group-hover:text-white"
       >
         {{ title }}
       </h3>

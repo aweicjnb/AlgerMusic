@@ -12,6 +12,7 @@ import { initializeFonts } from './modules/fonts';
 import { initializeLocalMusicScanner } from './modules/localMusicScanner';
 import { initializeLoginWindow } from './modules/loginWindow';
 import { initLxMusicHttp } from './modules/lxMusicHttp';
+import { initializeMediaTransportLog } from './modules/mediaTransportLog';
 import { initializeOtherApi } from './modules/otherApi';
 import { initializePlaybackLog, writePlaybackLog } from './modules/playbackLog';
 import { initializeRemoteControl } from './modules/remoteControl';
@@ -61,6 +62,8 @@ function initialize(configStore: any) {
   mainWindow.webContents.on('render-process-gone', (_, details) => {
     writePlaybackLog('app.renderer-exit', { reason: details.reason, exitCode: details.exitCode });
   });
+  mainWindow.on('unresponsive', () => writePlaybackLog('app.window-unresponsive'));
+  mainWindow.on('responsive', () => writePlaybackLog('app.window-responsive'));
 
   // 初始化托盘
   initializeTray(iconPath, mainWindow);
@@ -121,7 +124,19 @@ if (!isSingleInstance) {
   // 应用程序准备就绪时的处理
   app.whenReady().then(() => {
     initializePlaybackLog(() => mainWindow?.webContents);
-    writePlaybackLog('app.start', { version: app.getVersion(), platform: process.platform });
+    initializeMediaTransportLog(session.defaultSession, () => mainWindow?.webContents);
+    writePlaybackLog('app.start', {
+      version: app.getVersion(),
+      diagnosticsVersion: 2,
+      electronVersion: process.versions.electron,
+      platform: process.platform,
+      arch: process.arch
+    });
+    app.on('child-process-gone', (_, details) => {
+      if (details.type === 'GPU') {
+        writePlaybackLog('app.gpu-exit', { reason: details.reason, exitCode: details.exitCode });
+      }
+    });
 
     // 设置应用ID
     electronApp.setAppUserModelId('com.alger.music');

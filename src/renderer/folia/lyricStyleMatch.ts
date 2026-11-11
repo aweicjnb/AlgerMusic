@@ -9,7 +9,7 @@ type StyleProfile = {
 };
 
 // Positive weights support the style; negative weights reserve it for a different atmosphere.
-const STYLE_PROFILES: Record<FoliaStyle, StyleProfile> = {
+const STYLE_PROFILES: Record<Exclude<FoliaStyle, 'minions'>, StyleProfile> = {
   fume: { moods: { reflective: 1, nostalgic: 0.55 }, themes: { growth: 0.8, memory: 0.7 } },
   classic: {
     moods: { gentle: 0.6, hopeful: 0.65, reflective: 0.4 },
@@ -99,7 +99,8 @@ export function matchLyricStyle(
   random = Math.random
 ): LyricStyleChoice {
   const { moods, themes } = getLyricTags(lyric);
-  const ranked = FOLIA_STYLES.map(({ value: style }) => {
+  const ranked = FOLIA_STYLES.flatMap(({ value: style }) => {
+    if (style === 'minions') return [];
     const profile = STYLE_PROFILES[style];
     const contributions = [
       ...moods.map(({ key, label, confidence }) => ({
@@ -111,11 +112,13 @@ export function matchLyricStyle(
         score: (profile.themes[key] ?? 0) * confidence
       }))
     ];
-    return {
-      style,
-      contributions,
-      score: contributions.reduce((total, tag) => total + tag.score, 0)
-    };
+    return [
+      {
+        style,
+        contributions,
+        score: contributions.reduce((total, tag) => total + tag.score, 0)
+      }
+    ];
   }).sort((a, b) => b.score - a.score);
 
   const best = ranked[0];

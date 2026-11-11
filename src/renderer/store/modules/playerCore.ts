@@ -7,19 +7,37 @@ import i18n from '@/../i18n/renderer';
 import { getParsingMusicUrl } from '@/api/music';
 import { useLyrics, useSongDetail } from '@/hooks/usePlayerHooks';
 import { audioService } from '@/services/audioService';
+import { chooseResumePosition, isCurrentPlaybackAttempt } from '@/services/playbackDecision';
 import { playbackRequestManager } from '@/services/playbackRequestManager';
+import {
+  createPlaybackSession,
+  type PlaybackEvent,
+  type PlaybackFailure,
+  reducePlaybackSession
+} from '@/services/playbackSession';
 import { preloadService } from '@/services/preloadService';
 import { SongSourceConfigManager } from '@/services/SongSourceConfigManager';
 import type { AudioOutputDevice } from '@/types/audio';
 import type { Platform, SongResult } from '@/types/music';
 import { getImgUrl } from '@/utils';
 import { getImageLinearBackground } from '@/utils/linearColor';
-import { audioSourceKind, logPlayback, logTrack, playbackErrorFields } from '@/utils/playbackLog';
+import {
+  audioSourceKind,
+  bindPlaybackMedia,
+  logPlayback,
+  logTrack,
+  playbackErrorFields
+} from '@/utils/playbackLog';
 
 import { usePlayHistoryStore } from './playHistory';
 
 const { message } = createDiscreteApi(['message']);
 type PlaybackTrigger = 'request' | 'startup' | 'play-error' | 'start-timeout' | 'source-recovery';
+interface PlaybackOrigin {
+  parentRequestId?: string;
+  parentAudioAttempt?: number;
+  recoveryPositionSeconds?: number;
+}
 
 /**
  * 核心播放控制 Store
@@ -29,14 +47,20 @@ export const usePlayerCoreStore = defineStore(
   'playerCore',
   () => {
     // ==================== 状态 ====================
-    const play = ref(false);
-    const isPlay = ref(false);
+    const playbackSession = ref(createPlaybackSession());
+    const playbackStatus = computed(() => playbackSession.value.phase);
+    const play = computed(() => playbackSession.value.wantsPlay);
+    const isPlay = computed(() => playbackStatus.value === 'playing');
     const playMusic = ref<SongResult>({} as SongResult);
     const playMusicUrl = ref('');
     const musicFull = ref(false);
     const playbackRate = ref(1.0);
     const volume = ref(1);
-    const userPlayIntent = ref(false); // 用户是否想要播放
+    // 播放意图与 play 使用同一个状态，避免暂停后留下旧的“仍想播放”标记。
+    const userPlayIntent = computed(() => play.value);
+    const failedTrackId = computed(() =>
+      playbackSession.value.failure === 'missing-source' ? (playMusic.value.id ?? null) : null
+    );
     const isFmPlaying = ref(false); // 是否正在播放私人FM
 
     // 音频输出设备
@@ -46,6 +70,7 @@ export const usePlayerCoreStore = defineStore(
     const availableAudioDevices = ref<AudioOutputDevice[]>([]);
 
     let checkPlayTime: NodeJS.Timeout | null = null;
+    let clearPlaybackCheck: (() => void) | null = null;
     let checkPlaybackRetryCount = 0;
     const MAX_CHECKPLAYBACK_RETRIES = 3;
 
@@ -58,10 +83,59 @@ export const usePlayerCoreStore = defineStore(
     /**
      * 设置播放状态
      */
+    const updatePlayback = (event: PlaybackEvent) => {
+      const previous = playbackSession.value;
+      const next = reducePlaybackSession(previous, event);
+      if (next === previous) return;
+      playbackSession.value = next;
+      playMusic.value.playLoading = next.phase === 'loading';
+      if (next.phase !== previous.phase) {
+        logPlayback('playback.state', {
+          requestId: next.requestId,
+          previous: previous.phase,
+          phase: next.phase,
+          shouldPlay: next.wantsPlay,
+          failure: next.failure
+        });
+      }
+      window.electron?.ipcRenderer.send('update-play-state', next.phase === 'playing');
+    };
     const setIsPlay = (value: boolean) => {
-      isPlay.value = value;
-      play.value = value;
-      window.electron?.ipcRenderer.send('update-play-state', value);
+      updatePlayback({ type: 'intent', wantsPlay: value });
+      if (!value) clearPlaybackCheck?.();
+      else if (audioService.isActuallyPlaying()) onAudioPlaying();
+    };
+    const onAudioPlaying = () => {
+      const audio = audioService.getPlaybackDiagnostics();
+      if (
+        !isCurrentPlaybackAttempt({
+          requestId: audio.audioRequestId,
+          currentRequestId: playbackSession.value.requestId,
+          selectedTrack: playMusic.value,
+          audioTrack: audioService.getCurrentTrack(),
+          expectedSound: audioService.getCurrentSound(),
+          currentSound: audioService.getCurrentSound()
+        })
+      )
+        return;
+      if (!play.value) {
+        audioService.getCurrentSound()?.pause();
+        return;
+      }
+      updatePlayback({ type: 'playing', requestId: playbackSession.value.requestId });
+    };
+    const onAudioPaused = () => {
+      updatePlayback({ type: 'paused', requestId: playbackSession.value.requestId });
+      clearPlaybackCheck?.();
+    };
+    const failPlayback = (
+      failure: PlaybackFailure,
+      requestId = playbackSession.value.requestId
+    ) => {
+      if (requestId !== playbackSession.value.requestId) return;
+      audioService.discardCurrentSound();
+      clearPlaybackCheck?.();
+      updatePlayback({ type: 'failed', requestId, failure });
     };
 
     /**
@@ -116,55 +190,93 @@ export const usePlayerCoreStore = defineStore(
      * 在播放开始后延迟检查音频是否真正在播放，防止无声播放
      */
     const checkPlaybackState = (song: SongResult, requestId?: string, timeout: number = 6000) => {
-      if (checkPlayTime) {
-        clearTimeout(checkPlayTime);
-      }
+      clearPlaybackCheck?.();
       const sound = audioService.getCurrentSound();
       if (!sound) return;
 
       // 如果没有提供 requestId，创建一个临时标识
       const actualRequestId = requestId || `check_${Date.now()}`;
-
-      const onPlayHandler = () => {
-        console.log(`[${actualRequestId}] 播放事件触发，歌曲成功开始播放`);
+      const checkStartedAt = performance.now();
+      const checkDiagnostics = () => ({
+        ...audioService.getPlaybackDiagnostics(),
+        requestId: actualRequestId,
+        currentRequestId: playbackRequestManager.getCurrentRequestId(),
+        requested: logTrack(song),
+        selected: logTrack(playMusic.value),
+        sameSound: sound === audioService.getCurrentSound(),
+        shouldPlay: play.value,
+        userPlayIntent: userPlayIntent.value,
+        timeoutMs: timeout,
+        elapsedMs: Math.round(performance.now() - checkStartedAt)
+      });
+      const isCurrentCheck = () =>
+        isCurrentPlaybackAttempt({
+          requestId,
+          currentRequestId: playbackRequestManager.getCurrentRequestId(),
+          selectedTrack: playMusic.value,
+          audioTrack: audioService.getCurrentTrack(),
+          expectedSound: sound,
+          currentSound: audioService.getCurrentSound()
+        }) && song.id === playMusic.value.id;
+      const cleanup = () => {
         audioService.off('play', onPlayHandler);
         audioService.off('playerror', onPlayErrorHandler);
-        checkPlaybackRetryCount = 0; // 播放成功，重置重试计数
         if (checkPlayTime) {
           clearTimeout(checkPlayTime);
           checkPlayTime = null;
         }
+        if (clearPlaybackCheck === cleanup) clearPlaybackCheck = null;
+      };
+
+      const onPlayHandler = () => {
+        if (!isCurrentCheck()) {
+          logPlayback('playback.check-skipped', { ...checkDiagnostics(), reason: 'stale-play' });
+          cleanup();
+          return;
+        }
+        console.log(`[${actualRequestId}] 播放事件触发，歌曲成功开始播放`);
+        cleanup();
+        checkPlaybackRetryCount = 0; // 播放成功，重置重试计数
       };
 
       const onPlayErrorHandler = async () => {
+        if (!isCurrentCheck()) {
+          logPlayback('playback.check-skipped', {
+            ...checkDiagnostics(),
+            reason: 'stale-playerror'
+          });
+          cleanup();
+          return;
+        }
         console.log('播放错误事件触发，检查是否需要重新获取URL');
-        audioService.off('play', onPlayHandler);
-        audioService.off('playerror', onPlayErrorHandler);
+        cleanup();
 
         // 如果有 requestId，验证其有效性
         if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
           console.log('请求已过期，跳过重试');
+          logPlayback('playback.retry-skipped', {
+            ...checkDiagnostics(),
+            reason: 'play-error',
+            stage: 'superseded'
+          });
           return;
         }
 
         // 检查重试次数限制
         if (checkPlaybackRetryCount >= MAX_CHECKPLAYBACK_RETRIES) {
-          logPlayback('playback.retry-limit', { requestId: actualRequestId, reason: 'play-error' });
+          logPlayback('playback.retry-limit', { ...checkDiagnostics(), reason: 'play-error' });
           console.warn(`播放重试已达上限 (${MAX_CHECKPLAYBACK_RETRIES} 次)，停止重试`);
           checkPlaybackRetryCount = 0;
           setPlayMusic(false);
           return;
         }
 
-        if (userPlayIntent.value && play.value) {
+        if (play.value) {
           checkPlaybackRetryCount++;
           logPlayback('playback.retry', {
-            requestId: actualRequestId,
+            ...checkDiagnostics(),
             reason: 'play-error',
-            attempt: checkPlaybackRetryCount,
-            requested: logTrack(song),
-            selected: logTrack(playMusic.value),
-            audioTrack: logTrack(audioService.getCurrentTrack())
+            attempt: checkPlaybackRetryCount
           });
           console.log(
             `播放失败，尝试刷新URL并重新播放 (重试 ${checkPlaybackRetryCount}/${MAX_CHECKPLAYBACK_RETRIES})`
@@ -174,19 +286,38 @@ export const usePlayerCoreStore = defineStore(
             playMusic.value.playMusicUrl = undefined;
           }
           const refreshedSong = { ...song, isFirstPlay: true };
-          await handlePlayMusic(refreshedSong, true, 'play-error');
+          await handlePlayMusic(refreshedSong, true, 'play-error', {
+            parentRequestId: actualRequestId,
+            parentAudioAttempt: audioService.getPlaybackDiagnostics().audioAttempt
+          });
+        } else {
+          logPlayback('playback.retry-skipped', {
+            ...checkDiagnostics(),
+            reason: 'play-error',
+            stage: 'paused'
+          });
         }
       };
 
       audioService.on('play', onPlayHandler);
       audioService.on('playerror', onPlayErrorHandler);
+      clearPlaybackCheck = cleanup;
 
       checkPlayTime = setTimeout(() => {
+        if (!isCurrentCheck()) {
+          logPlayback('playback.check-skipped', { ...checkDiagnostics(), reason: 'stale-timeout' });
+          cleanup();
+          return;
+        }
         // 如果有 requestId，验证其有效性
         if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
           console.log('请求已过期，跳过超时重试');
-          audioService.off('play', onPlayHandler);
-          audioService.off('playerror', onPlayErrorHandler);
+          logPlayback('playback.retry-skipped', {
+            ...checkDiagnostics(),
+            reason: 'start-timeout',
+            stage: 'superseded'
+          });
+          cleanup();
           return;
         }
 
@@ -209,19 +340,22 @@ export const usePlayerCoreStore = defineStore(
         if (htmlPlaying) {
           // 底层 HTMLAudioElement 实际在播放，不需要重试
           console.log('底层音频元素正在播放，跳过超时重试');
-          audioService.off('play', onPlayHandler);
-          audioService.off('playerror', onPlayErrorHandler);
+          logPlayback('playback.retry-skipped', {
+            ...checkDiagnostics(),
+            reason: 'start-timeout',
+            stage: 'media-playing'
+          });
+          cleanup();
           return;
         }
 
-        if (!audioService.isActuallyPlaying() && userPlayIntent.value && play.value) {
-          audioService.off('play', onPlayHandler);
-          audioService.off('playerror', onPlayErrorHandler);
+        if (!audioService.isActuallyPlaying() && play.value) {
+          cleanup();
 
           // 检查重试次数限制
           if (checkPlaybackRetryCount >= MAX_CHECKPLAYBACK_RETRIES) {
             logPlayback('playback.retry-limit', {
-              requestId: actualRequestId,
+              ...checkDiagnostics(),
               reason: 'start-timeout'
             });
             console.warn(`超时重试已达上限 (${MAX_CHECKPLAYBACK_RETRIES} 次)，停止重试`);
@@ -232,13 +366,9 @@ export const usePlayerCoreStore = defineStore(
 
           checkPlaybackRetryCount++;
           logPlayback('playback.retry', {
-            requestId: actualRequestId,
+            ...checkDiagnostics(),
             reason: 'start-timeout',
-            timeoutMs: timeout,
-            attempt: checkPlaybackRetryCount,
-            requested: logTrack(song),
-            selected: logTrack(playMusic.value),
-            audioTrack: logTrack(audioService.getCurrentTrack())
+            attempt: checkPlaybackRetryCount
           });
           console.log(
             `${timeout}ms后歌曲未真正播放，尝试重新获取URL (重试 ${checkPlaybackRetryCount}/${MAX_CHECKPLAYBACK_RETRIES})`
@@ -250,11 +380,13 @@ export const usePlayerCoreStore = defineStore(
           }
           (async () => {
             const refreshedSong = { ...song, isFirstPlay: true };
-            await handlePlayMusic(refreshedSong, true, 'start-timeout');
+            await handlePlayMusic(refreshedSong, true, 'start-timeout', {
+              parentRequestId: actualRequestId,
+              parentAudioAttempt: audioService.getPlaybackDiagnostics().audioAttempt
+            });
           })();
         } else {
-          audioService.off('play', onPlayHandler);
-          audioService.off('playerror', onPlayErrorHandler);
+          cleanup();
         }
       }, timeout);
     };
@@ -265,7 +397,8 @@ export const usePlayerCoreStore = defineStore(
     const handlePlayMusic = async (
       music: SongResult,
       shouldPlay = true,
-      trigger: PlaybackTrigger = 'request'
+      trigger: PlaybackTrigger = 'request',
+      origin?: PlaybackOrigin
     ) => {
       // 如果是新歌曲，重置已尝试的音源和重试计数
       if (music.id !== playMusic.value.id) {
@@ -274,12 +407,20 @@ export const usePlayerCoreStore = defineStore(
       }
 
       // 创建新的播放请求并取消之前的所有请求
+      const requestStartedAt = performance.now();
+      const previousRequestId = playbackRequestManager.getCurrentRequestId();
       const requestId = playbackRequestManager.createRequest(music);
+      clearPlaybackCheck?.();
       const requested = logTrack(music);
+      const requestLog = { requestId, trigger, requested, ...origin };
+      const requestState = () => ({
+        ...requestLog,
+        currentRequestId: playbackRequestManager.getCurrentRequestId(),
+        elapsedMs: Math.round(performance.now() - requestStartedAt)
+      });
       logPlayback('playback.request', {
-        requestId,
-        trigger,
-        requested,
+        ...requestLog,
+        previousRequestId,
         selected: logTrack(playMusic.value),
         audioTrack: logTrack(audioService.getCurrentTrack()),
         shouldPlay,
@@ -290,19 +431,29 @@ export const usePlayerCoreStore = defineStore(
       const currentSound = audioService.getCurrentSound();
       if (currentSound) {
         console.log('主动停止并卸载当前音频实例');
-        currentSound.stop();
-        currentSound.unload();
+        if (currentSound.state() !== 'unloaded') {
+          logPlayback('playback.replacing-audio', {
+            ...requestState(),
+            ...audioService.getPlaybackDiagnostics(currentSound)
+          });
+        }
       }
+      audioService.discardCurrentSound();
+      playMusicUrl.value = '';
+      playMusic.value = { ...music };
+      updatePlayback({ type: 'begin', requestId, wantsPlay: shouldPlay });
 
       // 验证请求是否仍然有效
       if (!playbackRequestManager.isRequestValid(requestId)) {
         console.log(`[handlePlayMusic] 请求已失效: ${requestId}`);
+        logPlayback('playback.superseded', { ...requestState(), stage: 'before-activation' });
         return false;
       }
 
       // 激活请求
       if (!playbackRequestManager.activateRequest(requestId)) {
         console.log(`[handlePlayMusic] 无法激活请求: ${requestId}`);
+        logPlayback('playback.failed', { ...requestState(), stage: 'activation' });
         return false;
       }
 
@@ -312,7 +463,7 @@ export const usePlayerCoreStore = defineStore(
       const { getSongDetail } = useSongDetail();
 
       // 并行加载歌词和背景色
-      const [lyrics, { backgroundColor, primaryColor }] = await Promise.all([
+      const metadata = Promise.all([
         (async () => {
           if (music.lyric && music.lyric.lrcTimeArray.length > 0) {
             return music.lyric;
@@ -326,11 +477,28 @@ export const usePlayerCoreStore = defineStore(
           return await getImageLinearBackground(getImgUrl(music?.picUrl, '30y30'));
         })()
       ]);
+      let metadataResult: Awaited<typeof metadata>;
+      try {
+        metadataResult = await metadata;
+      } catch (error) {
+        logPlayback('playback.failed', {
+          ...requestState(),
+          stage: 'metadata',
+          ...playbackErrorFields(error)
+        });
+        if (playbackRequestManager.isRequestValid(requestId)) {
+          failPlayback('metadata', requestId);
+          message.error(i18n.global.t('player.playbackRetry'));
+        }
+        playbackRequestManager.failRequest(requestId);
+        return false;
+      }
+      const [lyrics, { backgroundColor, primaryColor }] = metadataResult;
 
       // 在更新状态前再次验证请求
       if (!playbackRequestManager.isRequestValid(requestId)) {
         console.log(`[handlePlayMusic] 加载歌词/背景色后请求已失效: ${requestId}`);
-        logPlayback('playback.superseded', { requestId, stage: 'metadata' });
+        logPlayback('playback.superseded', { ...requestState(), stage: 'metadata' });
         return false;
       }
 
@@ -342,9 +510,7 @@ export const usePlayerCoreStore = defineStore(
 
       // 更新 playMusic 和播放状态
       playMusic.value = music;
-      play.value = shouldPlay;
-      isPlay.value = shouldPlay;
-      userPlayIntent.value = shouldPlay;
+      music.playLoading = true;
 
       // 更新标题
       let title = music.name;
@@ -373,7 +539,7 @@ export const usePlayerCoreStore = defineStore(
         // 在获取详情后再次验证请求
         if (!playbackRequestManager.isRequestValid(requestId)) {
           console.log(`[handlePlayMusic] 获取歌曲详情后请求已失效: ${requestId}`);
-          logPlayback('playback.superseded', { requestId, stage: 'source' });
+          logPlayback('playback.superseded', { ...requestState(), stage: 'source' });
           playbackRequestManager.failRequest(requestId);
           return false;
         }
@@ -381,10 +547,11 @@ export const usePlayerCoreStore = defineStore(
         updatedPlayMusic.lyric = lyrics;
 
         playMusic.value = updatedPlayMusic;
+        playMusic.value.playLoading = true;
         playMusicUrl.value = updatedPlayMusic.playMusicUrl as string;
         music.playMusicUrl = updatedPlayMusic.playMusicUrl as string;
         logPlayback('playback.source-resolved', {
-          requestId,
+          ...requestState(),
           selected: logTrack(updatedPlayMusic),
           sourceKind: audioSourceKind(playMusicUrl.value)
         });
@@ -411,12 +578,17 @@ export const usePlayerCoreStore = defineStore(
         }
 
         try {
-          const result = await playAudio(requestId);
+          const result = await playAudio(requestId, origin?.recoveryPositionSeconds);
 
           if (result) {
             // 播放成功，清除 isFirstPlay 标记，避免暂停时被误判为新歌
             playMusic.value.isFirstPlay = false;
             playbackRequestManager.completeRequest(requestId);
+            logPlayback('playback.loaded', {
+              ...requestState(),
+              ...audioService.getPlaybackDiagnostics(result),
+              shouldPlay
+            });
             return true;
           } else {
             playbackRequestManager.failRequest(requestId);
@@ -424,24 +596,26 @@ export const usePlayerCoreStore = defineStore(
           }
         } catch (error) {
           logPlayback('playback.failed', {
-            requestId,
+            ...requestState(),
             stage: 'play',
             ...playbackErrorFields(error)
           });
           console.error('自动播放音频失败:', error);
+          failPlayback('audio', requestId);
           playbackRequestManager.failRequest(requestId);
           return false;
         }
       } catch (error) {
         logPlayback('playback.failed', {
-          requestId,
+          ...requestState(),
           stage: 'source',
           ...playbackErrorFields(error)
         });
         console.error('处理播放音乐失败:', error);
-        message.error(i18n.global.t('player.playFailed'));
-        if (playMusic.value) {
-          playMusic.value.playLoading = false;
+        if (playbackRequestManager.isRequestValid(requestId)) {
+          message.error(i18n.global.t('player.playbackRetry'));
+          if (playMusic.value) playMusic.value.playLoading = false;
+          failPlayback('source', requestId);
         }
         playbackRequestManager.failRequest(requestId);
 
@@ -452,50 +626,74 @@ export const usePlayerCoreStore = defineStore(
     /**
      * 播放音频
      */
-    const playAudio = async (requestId?: string) => {
+    const playAudio = async (requestId?: string, recoveryPositionSeconds?: number) => {
+      const playAudioStartedAt = performance.now();
+      const attemptState = () => ({
+        requestId,
+        currentRequestId: playbackRequestManager.getCurrentRequestId(),
+        selected: logTrack(playMusic.value),
+        sourceKind: audioSourceKind(playMusicUrl.value),
+        recoveryPositionSeconds,
+        elapsedMs: Math.round(performance.now() - playAudioStartedAt)
+      });
       if (!playMusicUrl.value || !playMusic.value) {
-        logPlayback('playback.failed', { requestId, stage: 'missing-source' });
+        logPlayback('playback.failed', { ...attemptState(), stage: 'missing-source' });
+        if (!requestId || playbackRequestManager.isRequestValid(requestId)) {
+          failPlayback('missing-source', requestId ?? playbackSession.value.requestId);
+          if (playMusic.value) playMusic.value.playLoading = false;
+          message.error(i18n.global.t('player.sourceUnavailable'));
+        }
         return null;
       }
 
       // 如果提供了 requestId，验证请求是否仍然有效
       if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
         console.log(`[playAudio] 请求已失效: ${requestId}`);
-        logPlayback('playback.superseded', { requestId, stage: 'before-preload' });
+        logPlayback('playback.superseded', { ...attemptState(), stage: 'before-preload' });
         return null;
       }
 
       try {
-        const shouldPlay = play.value;
-        console.log('播放音频，当前播放状态:', shouldPlay ? '播放' : '暂停');
+        const requestedTrack = { ...playMusic.value };
+        const requestedUrl = playMusicUrl.value;
 
-        // 检查保存的进度
-        let initialPosition = 0;
-        const savedProgress = JSON.parse(localStorage.getItem('playProgress') || '{}');
+        // 自动恢复优先使用出错时的实际进度，普通启动才读取保存的进度。
+        let savedProgress: { songId?: SongResult['id']; progress?: number } | null = null;
+        try {
+          savedProgress = JSON.parse(localStorage.getItem('playProgress') || '{}');
+        } catch {
+          logPlayback('playback.saved-progress-invalid', { ...attemptState() });
+        }
         console.log(
           '[playAudio] 读取保存的进度:',
           savedProgress,
           '当前歌曲ID:',
           playMusic.value.id
         );
-        if (savedProgress.songId === playMusic.value.id) {
-          initialPosition = savedProgress.progress;
-          console.log('[playAudio] 恢复播放进度:', initialPosition);
-        }
+        const savedProgressMatched = savedProgress?.songId === playMusic.value.id;
+        const resumePosition = chooseResumePosition(
+          requestedTrack.id,
+          recoveryPositionSeconds,
+          savedProgress
+        );
+        const initialPosition = resumePosition.seconds;
 
         // 使用 PreloadService 获取音频
         // 优先使用已预加载的 sound（通过 consume 获取并从缓存中移除）
         // 如果没有预加载，则进行加载
         let sound: Howl;
-        const preloadTrack = logTrack(playMusic.value);
+        const preloadTrack = logTrack(requestedTrack);
+        const preloadStartedAt = performance.now();
         try {
           // 先尝试消耗预加载的 sound
-          const preloadedSound = preloadService.consume(playMusic.value.id);
+          const preloadedSound = preloadService.consume(requestedTrack);
           logPlayback('playback.preload', {
-            requestId,
+            ...attemptState(),
             requested: preloadTrack,
-            shouldPlay,
-            positionSeconds: initialPosition || 0,
+            shouldPlay: play.value,
+            positionSeconds: initialPosition,
+            positionSource: resumePosition.source,
+            savedProgressMatched,
             cacheHit: preloadedSound?.state() === 'loaded'
           });
           if (preloadedSound && preloadedSound.state() === 'loaded') {
@@ -504,12 +702,14 @@ export const usePlayerCoreStore = defineStore(
           } else {
             // 没有预加载或预加载状态不正常，需要加载
             console.log(`[playAudio] 没有预加载，开始加载: ${playMusic.value.name}`);
-            sound = await preloadService.load(playMusic.value);
+            bindPlaybackMedia(requestId, undefined, requestedUrl);
+            sound = await preloadService.load(requestedTrack);
           }
         } catch (error) {
           logPlayback('playback.preload-failed', {
-            requestId,
+            ...attemptState(),
             requested: preloadTrack,
+            preloadMs: Math.round(performance.now() - preloadStartedAt),
             ...playbackErrorFields(error)
           });
           console.error('PreloadService 加载失败:', error);
@@ -518,27 +718,39 @@ export const usePlayerCoreStore = defineStore(
           throw error;
         }
 
+        // 预加载期间可能已换歌。验证后才允许把音频交给播放器。
+        if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
+          logPlayback('playback.superseded', { ...attemptState(), stage: 'after-preload' });
+          return null;
+        }
+        preloadService.consume(requestedTrack);
+        const shouldPlay = play.value;
         // 播放新音频，传入已加载的 sound 实例
         logPlayback('playback.handoff', {
-          requestId,
+          ...attemptState(),
           requested: preloadTrack,
-          selected: logTrack(playMusic.value),
           loadedTrack: preloadService.getLoadedTrack(sound),
-          currentRequestId: playbackRequestManager.getCurrentRequestId()
+          positionSeconds: Number.isFinite(initialPosition) ? initialPosition : undefined,
+          preloadMs: Math.round(performance.now() - preloadStartedAt)
         });
         const newSound = await audioService.play(
-          playMusicUrl.value,
-          playMusic.value,
+          requestedUrl,
+          requestedTrack,
           shouldPlay,
           initialPosition || 0,
           sound,
-          requestId
+          requestId,
+          () => play.value && (!requestId || playbackRequestManager.isRequestValid(requestId))
         );
 
         // 播放后再次验证请求
         if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
           console.log(`[playAudio] 播放后请求已失效: ${requestId}`);
-          logPlayback('playback.superseded', { requestId, stage: 'after-audio-load' });
+          logPlayback('playback.superseded', {
+            ...attemptState(),
+            ...audioService.getPlaybackDiagnostics(newSound),
+            stage: 'after-audio-load'
+          });
           newSound.stop();
           newSound.unload();
           return null;
@@ -548,6 +760,8 @@ export const usePlayerCoreStore = defineStore(
         if (shouldPlay && requestId) {
           checkPlaybackState(playMusic.value, requestId);
         }
+        updatePlayback({ type: 'ready', requestId: requestId ?? playbackSession.value.requestId });
+        if (audioService.isActuallyPlaying()) onAudioPlaying();
 
         // 发布音频就绪事件
         window.dispatchEvent(
@@ -559,7 +773,7 @@ export const usePlayerCoreStore = defineStore(
         return newSound;
       } catch (error) {
         logPlayback('playback.failed', {
-          requestId,
+          ...attemptState(),
           stage: 'audio',
           ...playbackErrorFields(error)
         });
@@ -567,9 +781,23 @@ export const usePlayerCoreStore = defineStore(
 
         const errorMsg = error instanceof Error ? error.message : String(error);
 
+        if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
+          logPlayback('playback.retry-skipped', {
+            ...attemptState(),
+            reason: 'superseded',
+            stage: 'audio-error'
+          });
+          return null;
+        }
+
         // 操作锁错误不应该停止播放状态，只需要重试
         if (errorMsg.includes('操作锁激活')) {
           console.log('由于操作锁正在使用，将在1000ms后重试');
+          logPlayback('playback.retry-scheduled', {
+            ...attemptState(),
+            reason: 'operation-lock',
+            delayMs: 1000
+          });
 
           try {
             audioService.forceResetOperationLock();
@@ -582,10 +810,16 @@ export const usePlayerCoreStore = defineStore(
             // 验证请求是否仍然有效再重试
             if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
               console.log('重试时请求已失效，跳过重试');
+              logPlayback('playback.retry-skipped', {
+                ...attemptState(),
+                reason: 'operation-lock',
+                stage: 'superseded'
+              });
               return;
             }
-            if (userPlayIntent.value && play.value) {
-              playAudio(requestId).catch((e) => {
+            if (play.value) {
+              logPlayback('playback.retry', { ...attemptState(), reason: 'operation-lock' });
+              playAudio(requestId, recoveryPositionSeconds).catch((e) => {
                 console.error('重试播放失败:', e);
                 setPlayMusic(false);
               });
@@ -593,9 +827,9 @@ export const usePlayerCoreStore = defineStore(
           }, 1000);
         } else {
           // 非操作锁错误，停止播放并通知用户
-          setPlayMusic(false);
+          failPlayback('audio', requestId ?? playbackSession.value.requestId);
           console.warn('播放音频失败（非操作锁错误），由调用方处理重试');
-          message.error(i18n.global.t('player.playFailed'));
+          message.error(i18n.global.t('player.playbackRetry'));
         }
 
         return null;
@@ -612,7 +846,6 @@ export const usePlayerCoreStore = defineStore(
           currentSound.pause();
         }
         setPlayMusic(false);
-        userPlayIntent.value = false;
       } catch (error) {
         console.error('暂停播放失败:', error);
       }
@@ -624,12 +857,8 @@ export const usePlayerCoreStore = defineStore(
     const setPlayMusic = async (value: boolean | SongResult) => {
       if (typeof value === 'boolean') {
         setIsPlay(value);
-        userPlayIntent.value = value;
       } else {
         await handlePlayMusic(value);
-        play.value = true;
-        isPlay.value = true;
-        userPlayIntent.value = true;
       }
     };
 
@@ -701,14 +930,21 @@ export const usePlayerCoreStore = defineStore(
      * 初始化播放状态
      */
     const initializePlayState = async () => {
+      if (playbackRequestManager.getCurrentRequestId()) {
+        logPlayback('startup.restore-skipped', { reason: 'user-request-already-started' });
+        return;
+      }
       const { useSettingsStore } = await import('./settings');
       const settingStore = useSettingsStore();
       const savedTrack = logTrack(playMusic.value);
+      const startedAt = performance.now();
+      let requestId: string | null = null;
       logPlayback('startup.restore', {
         savedTrack,
         autoPlay: settingStore.setData.autoPlay,
         online: navigator.onLine,
-        lxSourceConfigured: Boolean(settingStore.setData.activeLxMusicApiId)
+        lxSourceConfigured: Boolean(settingStore.setData.activeLxMusicApiId),
+        sourceKind: audioSourceKind(playMusic.value?.playMusicUrl)
       });
 
       if (playMusic.value && Object.keys(playMusic.value).length > 0) {
@@ -719,7 +955,7 @@ export const usePlayerCoreStore = defineStore(
           // 本地音乐（local:// 协议）不需要重新获取 URL，保留原始路径
           const isLocalMusic = playMusic.value.playMusicUrl?.startsWith('local://');
 
-          const loaded = await handlePlayMusic(
+          const pendingRestore = handlePlayMusic(
             {
               ...playMusic.value,
               isFirstPlay: true,
@@ -728,15 +964,32 @@ export const usePlayerCoreStore = defineStore(
             isPlaying,
             'startup'
           );
-          logPlayback('startup.restore-result', { savedTrack, loaded, shouldPlay: isPlaying });
+          requestId = playbackRequestManager.getCurrentRequestId();
+          const loaded = await pendingRestore;
+          const audio = audioService.getPlaybackDiagnostics();
+          logPlayback('startup.restore-result', {
+            ...audio,
+            requestId,
+            currentRequestId: playbackRequestManager.getCurrentRequestId(),
+            savedTrack,
+            loaded,
+            shouldPlay: isPlaying,
+            elapsedMs: Math.round(performance.now() - startedAt)
+          });
         } catch (error) {
-          logPlayback('startup.restore-failed', { savedTrack, ...playbackErrorFields(error) });
+          logPlayback('startup.restore-failed', {
+            requestId,
+            savedTrack,
+            elapsedMs: Math.round(performance.now() - startedAt),
+            ...playbackErrorFields(error)
+          });
           console.error('重新获取音乐链接失败:', error);
-          play.value = false;
-          isPlay.value = false;
+          setIsPlay(false);
           playMusic.value = {} as SongResult;
           playMusicUrl.value = '';
         }
+      } else {
+        logPlayback('startup.restore-skipped', { reason: 'empty-saved-track' });
       }
 
       setTimeout(() => {
@@ -791,6 +1044,8 @@ export const usePlayerCoreStore = defineStore(
       playbackRate,
       volume,
       userPlayIntent,
+      failedTrackId,
+      playbackStatus,
       isFmPlaying,
       audioOutputDeviceId,
       availableAudioDevices,
@@ -801,6 +1056,8 @@ export const usePlayerCoreStore = defineStore(
 
       // Actions
       setIsPlay,
+      onAudioPlaying,
+      onAudioPaused,
       setMusicFull,
       setPlayMusic,
       setPlaybackRate,
@@ -823,7 +1080,7 @@ export const usePlayerCoreStore = defineStore(
     persist: {
       key: 'player-core-store',
       storage: localStorage,
-      pick: ['playMusic', 'playMusicUrl', 'playbackRate', 'volume', 'isPlay', 'audioOutputDeviceId']
+      pick: ['playMusic', 'playMusicUrl', 'playbackRate', 'volume', 'audioOutputDeviceId']
     }
   }
 );

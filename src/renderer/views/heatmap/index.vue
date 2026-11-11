@@ -408,7 +408,6 @@ const handlePlaySong = async (songId: string | number) => {
   const song = playHistoryStore.musicHistory.find((music) => music.id === songId);
   if (song) {
     await playerStore.setPlay(song);
-    playerStore.setPlayMusic(true);
   }
 };
 

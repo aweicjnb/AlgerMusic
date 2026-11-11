@@ -14,6 +14,8 @@ export default {
   addCorrection: '{num}초 앞당기기',
   subtractCorrection: '{num}초 지연',
   playFailed: '현재 곡 재생 실패, 다음 곡 재생',
+  sourceUnavailable: '음원을 사용할 수 없습니다. 재생을 눌러 다시 시도하세요',
+  playbackRetry: '재생에 실패했습니다. 재생을 눌러 다시 시도하세요',
   parseFailedPlayNext: '곡 분석 실패, 다음 곡 재생',
   consecutiveFailsError:
     '재생 오류가 발생했습니다. 네트워크 문제 또는 유효하지 않은 음원일 수 있습니다. 재생 목록을 변경하거나 나중에 다시 시도하세요',

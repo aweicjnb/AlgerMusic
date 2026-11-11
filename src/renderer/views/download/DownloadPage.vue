@@ -622,11 +622,12 @@ const handlePlayMusic = async (item: DownloadedItem) => {
     console.log('开始播放本地音乐:', song.name, '路径:', song.playMusicUrl);
 
     // 播放歌曲
-    await playerStore.setPlay(song);
-    playerStore.setPlayMusic(true);
-    playerStore.setIsPlay(true);
-
-    message.success(t('download.playStarted', { name: item.displayName || item.filename }));
+    const loaded = await playerStore.setPlay(song);
+    if (loaded === false) {
+      message.error(t('download.playFailed', { name: item.displayName || item.filename }));
+    } else if (loaded) {
+      message.success(t('download.playStarted', { name: item.displayName || item.filename }));
+    }
   } catch (error) {
     console.error('播放音乐失败:', error);
     message.error(t('download.playFailed', { name: item.displayName || item.filename }));

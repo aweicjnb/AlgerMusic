@@ -5,6 +5,7 @@ import { ref, watch } from 'vue';
 import setDataDefault from '@/../main/set.json';
 import homeRouter from '@/router/home';
 import { useMenuStore } from '@/store/modules/menu';
+import type { SettingsData } from '@/types/settings';
 import { isElectron } from '@/utils';
 import {
   applyTheme,
@@ -14,7 +15,7 @@ import {
   watchSystemTheme
 } from '@/utils/theme';
 
-import { type AppUpdateState,createDefaultAppUpdateState } from '../../../shared/appUpdate';
+import { type AppUpdateState, createDefaultAppUpdateState } from '../../../shared/appUpdate';
 
 export const useSettingsStore = defineStore('settings', () => {
   const theme = ref<ThemeType>(getCurrentTheme());
@@ -32,11 +33,11 @@ export const useSettingsStore = defineStore('settings', () => {
   // 系统主题监听器清理函数
   let systemThemeCleanup: (() => void) | null = null;
 
-  // 先声明 setData ref 但不初始化
-  const setData = ref<any>({});
+  // 先提供完整的默认字段，再合并持久化设置。
+  const setData = ref<SettingsData>({ ...setDataDefault, lxMusicScripts: [] } as SettingsData);
 
   // 先定义 setSetData 函数
-  const setSetData = (data: any) => {
+  const setSetData = (data: Partial<SettingsData>) => {
     // 合并现有设置和新设置
     const mergedData = {
       ...setData.value,
@@ -67,7 +68,7 @@ export const useSettingsStore = defineStore('settings', () => {
     };
 
     // 合并默认设置和保存的设置
-    const mergedSettings = mergeWith({}, setDataDefault, savedSettings, customizer);
+    const mergedSettings = mergeWith({}, setDataDefault, savedSettings, customizer) as SettingsData;
 
     // 更新设置并返回
     setSetData(mergedSettings);

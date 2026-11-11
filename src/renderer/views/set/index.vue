@@ -1,5 +1,7 @@
 <template>
-  <div class="h-full w-full bg-white dark:bg-black transition-colors duration-500 flex flex-col">
+  <div
+    class="settings-page h-full w-full bg-white dark:bg-black transition-colors duration-500 flex flex-col"
+  >
     <!-- 顶部导航区 -->
     <div
       class="flex-shrink-0 border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-black z-10 page-padding pt-6 pb-2"
@@ -30,27 +32,27 @@
     <!-- 内容区域 -->
     <n-scrollbar class="flex-1">
       <div class="w-full mx-auto pb-32 pt-6 page-padding">
-        <div v-show="currentSection === 'basic'" class="animate-fade-in">
+        <div v-if="currentSection === 'basic'" class="animate-fade-in">
           <basic-tab />
         </div>
 
-        <div v-show="currentSection === 'playback'" class="animate-fade-in">
+        <div v-if="currentSection === 'playback'" class="animate-fade-in">
           <playback-tab />
         </div>
 
-        <div v-show="currentSection === 'application'" class="animate-fade-in">
+        <div v-if="currentSection === 'application'" class="animate-fade-in">
           <application-tab />
         </div>
 
-        <div v-show="currentSection === 'network'" class="animate-fade-in">
+        <div v-if="currentSection === 'network'" class="animate-fade-in">
           <network-tab />
         </div>
 
-        <div v-show="currentSection === 'system'" class="animate-fade-in">
+        <div v-if="currentSection === 'system'" class="animate-fade-in">
           <system-tab />
         </div>
 
-        <div v-show="currentSection === 'about'" class="animate-fade-in">
+        <div v-if="currentSection === 'about'" class="animate-fade-in">
           <about-tab />
         </div>
 
@@ -69,6 +71,7 @@ import { useI18n } from 'vue-i18n';
 
 import PlayBottom from '@/components/common/PlayBottom.vue';
 import { useSettingsStore } from '@/store/modules/settings';
+import type { SettingsData } from '@/types/settings';
 import { isElectron } from '@/utils';
 
 import config from '../../../../package.json';
@@ -87,7 +90,7 @@ const dialog = useDialog();
 const { t } = useI18n();
 
 // ==================== 设置数据管理 ====================
-const saveSettings = useDebounceFn((data) => {
+const saveSettings = useDebounceFn((data: SettingsData) => {
   settingsStore.setSetData(data);
 }, 500);
 

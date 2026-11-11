@@ -1,9 +1,91 @@
 import { Howl, Howler } from 'howler';
 
+import { playbackRequestManager } from '@/services/playbackRequestManager';
 import type { AudioOutputDevice } from '@/types/audio';
 import type { SongResult } from '@/types/music';
 import { isElectron } from '@/utils'; // 导入isElectron常量
-import { audioSourceKind, logPlayback, logTrack, playbackErrorFields } from '@/utils/playbackLog';
+import {
+  audioSourceKind,
+  bindPlaybackMedia,
+  logPlayback,
+  logTrack,
+  playbackErrorFields
+} from '@/utils/playbackLog';
+
+import type { PlaybackLogData } from '../../shared/playbackLog';
+
+const LONG_BUFFER_MS = 2_000;
+const PLAYBACK_SAMPLE_MS = 30_000;
+const MEDIA_ERROR_REASONS: Record<number, string> = {
+  1: 'aborted',
+  2: 'network',
+  3: 'decode',
+  4: 'unsupported-source'
+};
+
+export interface AudioRecoveryTrigger {
+  requestId?: string;
+  audioAttempt: number;
+  reason: 'load-error' | 'play-error';
+  positionSeconds?: number;
+  sourceKind: string;
+}
+
+function getMediaNode(sound: Howl): HTMLMediaElement | undefined {
+  const node = (sound as Howl & { _sounds?: { _node?: unknown }[] })._sounds?.[0]?._node;
+  return node instanceof HTMLMediaElement ? node : undefined;
+}
+
+function getMediaState(media?: HTMLMediaElement) {
+  const positionSeconds = media?.currentTime;
+  let bufferedAheadSeconds: number | undefined;
+  if (media && positionSeconds !== undefined) {
+    bufferedAheadSeconds = 0;
+    const buffered = media.buffered;
+    for (let index = 0; index < buffered.length; index++) {
+      if (buffered.start(index) <= positionSeconds && positionSeconds <= buffered.end(index)) {
+        bufferedAheadSeconds = buffered.end(index) - positionSeconds;
+        break;
+      }
+    }
+  }
+
+  return {
+    positionSeconds,
+    durationSeconds: media?.duration,
+    bufferedAheadSeconds,
+    readyState: media?.readyState,
+    networkState: media?.networkState,
+    mediaPaused: media?.paused,
+    mediaSeeking: media?.seeking,
+    mediaEnded: media?.ended,
+    mediaMuted: media?.muted,
+    mediaVolume: media?.volume,
+    mediaErrorCode: media?.error?.code,
+    mediaErrorReason: media?.error ? MEDIA_ERROR_REASONS[media.error.code] : undefined
+  };
+}
+
+function howlerErrorFields(error: unknown): PlaybackLogData {
+  const fields = playbackErrorFields(error);
+  if (typeof error !== 'string') return fields;
+  if (error.startsWith('Playback was unable to start.')) {
+    return { ...fields, howlerErrorReason: 'play-start-rejected' };
+  }
+  if (error === 'No codec support for selected audio sources.') {
+    return { ...fields, howlerErrorReason: 'unsupported-codec' };
+  }
+  if (error === 'No audio support.') {
+    return { ...fields, howlerErrorReason: 'audio-unavailable' };
+  }
+  if (error === 'Decoding audio data failed.') {
+    return { ...fields, howlerErrorReason: 'decode-failed' };
+  }
+  const httpStatus = /^Failed loading audio file with status: (\d{3})\.$/.exec(error);
+  return httpStatus
+    ? { ...fields, howlerErrorReason: 'load-http-error', httpStatus: Number(httpStatus[1]) }
+    : fields;
+}
 
 class AudioService {
   private currentSound: Howl | null = null;
@@ -11,6 +93,10 @@ class AudioService {
 
   private currentTrack: SongResult | null = null;
   private readonly mediaLogListeners = new WeakMap<HTMLMediaElement, AbortController>();
+  private readonly audioLogContext = new WeakMap<
+    Howl,
+    { requestId?: string; audioAttempt: number; requested: ReturnType<typeof logTrack> }
+  >();
   private audioAttemptCount = 0;
 
   private context: AudioContext | null = null;
@@ -61,6 +147,9 @@ class AudioService {
   private operationLockId: string = '';
 
   constructor() {
+    // Howler only checks its WebAudio sounds before auto-suspending. Our HTML5
+    // sounds also pass through this context for EQ, so its timer cannot judge idleness.
+    Howler.autoSuspend = false;
     if ('mediaSession' in navigator) {
       this.initMediaSession();
     }
@@ -539,7 +628,8 @@ class AudioService {
     isPlay: boolean = true,
     seekTime: number = 0,
     existingSound?: Howl,
-    requestId?: string
+    requestId?: string,
+    canPlay: () => boolean = () => true
   ): Promise<Howl> {
     // 如果没有提供新的 URL 和 track，且当前有音频实例，则继续播放当前音频
     if (this.currentSound && !url && !track) {
@@ -580,24 +670,69 @@ class AudioService {
       let retryCount = 0;
       const maxRetries = 1;
       const requested = logTrack(track);
+      const sourceKind = audioSourceKind(url);
+      const requestIsCurrent = () => !requestId || playbackRequestManager.isRequestValid(requestId);
+      const requestState = () => {
+        const currentRequestId = playbackRequestManager.getCurrentRequestId();
+        return {
+          currentRequestId,
+          requestStatus: requestId
+            ? playbackRequestManager.getRequest(requestId)?.status
+            : undefined,
+          staleRequest: requestId ? requestId !== currentRequestId : undefined
+        };
+      };
 
       // 如果有正在加载的 pendingSound，先清理掉
       if (this.pendingSound) {
         console.log('audioService: 清理正在加载的 pendingSound');
+        logPlayback('audio.discard-pending', {
+          requestId,
+          requested,
+          ...this.getPlaybackDiagnostics(this.pendingSound)
+        });
         this.pendingSound.unload();
         this.pendingSound = null;
       }
 
-      const tryPlay = async () => {
+      const tryPlay = async (retry?: {
+        reason: AudioRecoveryTrigger['reason'];
+        parentAudioAttempt: number;
+        scheduledAt: number;
+        delayMs: number;
+      }) => {
+        if (!requestIsCurrent()) {
+          reject(new Error('Playback request superseded'));
+          return;
+        }
         const audioAttempt = ++this.audioAttemptCount;
         const logContext = { requestId, audioAttempt, requested };
+        const attemptStartedAt = performance.now();
+        if (retry) {
+          const previous = this.getPlaybackDiagnostics();
+          logPlayback('audio.retry-started', {
+            ...logContext,
+            ...requestState(),
+            activeAudioRequestId: previous.audioRequestId,
+            activeAudioAttempt: previous.audioAttempt,
+            activePositionSeconds: previous.positionSeconds,
+            audioTrack: previous.audioTrack,
+            sourceKind,
+            reason: retry.reason,
+            parentAudioAttempt: retry.parentAudioAttempt,
+            delayMs: retry.delayMs,
+            elapsedMs: Math.round(attemptStartedAt - retry.scheduledAt),
+            retryCount
+          });
+        }
         logPlayback('audio.loading', {
           ...logContext,
-          sourceKind: audioSourceKind(url),
+          ...requestState(),
+          sourceKind,
           reusedSound: Boolean(existingSound),
           hotSwap: Boolean(isHotSwap),
           shouldPlay: isPlay,
-          positionSeconds: seekTime,
+          positionSeconds: Number.isFinite(seekTime) ? seekTime : undefined,
           retryCount
         });
         try {
@@ -625,10 +760,22 @@ class AudioService {
             console.log('audioService: 恢复暂停的音频上下文');
             await Howler.ctx.resume();
           }
+          if (!requestIsCurrent()) throw new Error('Playback request superseded');
 
           // 非热切换模式下，先停止并清理现有的音频实例
           if (!isHotSwap && this.currentSound) {
             console.log('audioService: 停止并清理现有的音频实例');
+            const previous = this.getPlaybackDiagnostics();
+            logPlayback('audio.replacing', {
+              ...logContext,
+              ...requestState(),
+              replacedRequestId: previous.audioRequestId,
+              replacedAudioAttempt: previous.audioAttempt,
+              replacedTrack: previous.audioTrack,
+              replacedPositionSeconds: previous.positionSeconds,
+              replacedMediaPaused: previous.mediaPaused,
+              sourceKind
+            });
             // 确保任何进行中的seek操作被取消
             if (this.seekLock && this.seekDebounceTimer) {
               clearTimeout(this.seekDebounceTimer);
@@ -644,6 +791,7 @@ class AudioService {
             console.log('audioService: 清理 EQ');
             await this.disposeEQ(true);
           }
+          if (!requestIsCurrent()) throw new Error('Playback request superseded');
 
           // 如果不是热切换，立即更新 currentTrack
           if (!isHotSwap) {
@@ -674,41 +822,58 @@ class AudioService {
             });
           }
 
-          const loadedSource = (newSound as Howl & { _src?: string })._src;
-          const node = (newSound as Howl & { _sounds?: { _node?: unknown }[] })._sounds?.[0]?._node;
-          const media = node instanceof HTMLMediaElement ? node : undefined;
+          const soundSource = (newSound as Howl & { _src?: unknown })._src;
+          const loadedSource = typeof soundSource === 'string' ? soundSource : undefined;
+          this.audioLogContext.set(newSound, logContext);
+          bindPlaybackMedia(requestId, audioAttempt, url, loadedSource);
+          const media = getMediaNode(newSound);
+          let targetPositionSeconds = Number.isFinite(seekTime) ? seekTime : undefined;
+          let positionSource = seekTime > 0 ? 'requested-seek' : 'beginning';
           const audioState = () => ({
             ...logContext,
+            ...requestState(),
+            ...getMediaState(media),
             audioTrack: logTrack(this.currentTrack),
             active: this.currentSound === newSound,
-            positionSeconds: media?.currentTime,
-            durationSeconds: media?.duration,
-            readyState: media?.readyState,
-            networkState: media?.networkState
+            pending: this.pendingSound === newSound,
+            sourceKind,
+            loadedSourceKind: audioSourceKind(loadedSource),
+            mediaSourceKind: audioSourceKind(media?.currentSrc),
+            sourceMatches: loadedSource ? loadedSource === url : undefined,
+            targetPositionSeconds,
+            positionSource,
+            elapsedMs: Math.round(performance.now() - attemptStartedAt),
+            ...this.getAudioOutputDiagnostics()
           });
-          if (media) {
-            this.mediaLogListeners.get(media)?.abort();
-            const controller = new AbortController();
-            this.mediaLogListeners.set(media, controller);
-            let bufferingSince: number | undefined;
-            const onMediaEvent = (event: Event) => {
-              if (this.currentSound !== newSound || newSound.state() === 'unloaded') return;
-              if (event.type === 'playing') {
-                if (bufferingSince === undefined) return;
-                logPlayback('audio.buffer-resumed', {
-                  ...audioState(),
-                  bufferingMs: Math.round(performance.now() - bufferingSince)
-                });
-                bufferingSince = undefined;
-              } else {
-                bufferingSince ??= performance.now();
-                logPlayback('audio.buffering', { ...audioState(), reason: event.type });
-              }
+          if (media) this.watchMediaDiagnostics(media, newSound, audioState);
+
+          const scheduleRetry = (reason: AudioRecoveryTrigger['reason']) => {
+            retryCount++;
+            const delayMs = 1000 * retryCount;
+            logPlayback('audio.retry-scheduled', {
+              ...audioState(),
+              reason,
+              retryCount,
+              delayMs
+            });
+            console.log(`Retrying playback (${retryCount}/${maxRetries})...`);
+            const scheduledAt = performance.now();
+            setTimeout(
+              () => tryPlay({ reason, parentAudioAttempt: audioAttempt, scheduledAt, delayMs }),
+              delayMs
+            );
+          };
+          const triggerRecovery = (reason: AudioRecoveryTrigger['reason']) => {
+            logPlayback('audio.recovery-trigger', { ...audioState(), reason, retryCount });
+            const trigger: AudioRecoveryTrigger = {
+              requestId,
+              audioAttempt,
+              reason,
+              positionSeconds: media?.currentTime,
+              sourceKind
             };
-            for (const event of ['waiting', 'stalled', 'playing']) {
-              media.addEventListener(event, onMediaEvent, { signal: controller.signal });
-            }
-          }
+            this.emit('url_expired', track, trigger);
+          };
 
           // 统一设置事件处理
           const setupEvents = () => {
@@ -719,18 +884,15 @@ class AudioService {
             newSound.on('loaderror', (_, error) => {
               logPlayback('audio.load-error', {
                 ...audioState(),
-                mediaErrorCode: media?.error?.code,
-                ...playbackErrorFields(error)
+                ...howlerErrorFields(error)
               });
               console.error('Audio load error:', error);
               this.emit('loaderror', { track, error });
               if (retryCount < maxRetries && !existingSound) {
                 // 预加载的音频通常已经 loaded，不应重试
-                retryCount++;
-                console.log(`Retrying playback (${retryCount}/${maxRetries})...`);
-                setTimeout(tryPlay, 1000 * retryCount);
+                scheduleRetry('load-error');
               } else {
-                this.emit('url_expired', track);
+                triggerRecovery('load-error');
                 this.releaseOperationLock();
                 if (isHotSwap) this.pendingSound = null;
                 reject(new Error('音频加载失败，请尝试切换其他歌曲'));
@@ -740,17 +902,14 @@ class AudioService {
             newSound.on('playerror', (_, error) => {
               logPlayback('audio.play-error', {
                 ...audioState(),
-                mediaErrorCode: media?.error?.code,
-                ...playbackErrorFields(error)
+                ...howlerErrorFields(error)
               });
               console.error('Audio play error:', error);
               this.emit('playerror', { track, error });
               if (retryCount < maxRetries) {
-                retryCount++;
-                console.log(`Retrying playback (${retryCount}/${maxRetries})...`);
-                setTimeout(tryPlay, 1000 * retryCount);
+                scheduleRetry('play-error');
               } else {
-                this.emit('url_expired', track);
+                triggerRecovery('play-error');
                 this.releaseOperationLock();
                 if (isHotSwap) this.pendingSound = null;
                 reject(new Error('音频播放失败，请尝试切换其他歌曲'));
@@ -759,6 +918,13 @@ class AudioService {
 
             const onLoaded = async () => {
               try {
+                const discardIfSuperseded = () => {
+                  if (requestIsCurrent()) return false;
+                  newSound.unload();
+                  reject(new Error('Playback request superseded'));
+                  return true;
+                };
+                if (discardIfSuperseded()) return;
                 // 如果是热切换，现在执行切换逻辑
                 if (isHotSwap) {
                   console.log('audioService: 执行无缝切换');
@@ -772,17 +938,20 @@ class AudioService {
                   } else if (this.currentSound) {
                     // 否则同步当前进度
                     targetPos = this.currentSound.seek() as number;
+                    positionSource = 'previous-audio';
                   }
 
                   // 2. 同步新音频进度
+                  targetPositionSeconds = Number.isFinite(targetPos) ? targetPos : undefined;
                   newSound.seek(targetPos);
 
                   // 3. 初始化新音频的 EQ
                   await this.disposeEQ(true);
                   await this.setupEQ(newSound);
+                  if (discardIfSuperseded()) return;
 
                   // 4. 播放新音频
-                  if (isPlay) {
+                  if (isPlay && canPlay()) {
                     newSound.play();
                   }
 
@@ -801,6 +970,7 @@ class AudioService {
                 } else {
                   // 普通加载逻辑
                   await this.setupEQ(newSound);
+                  if (discardIfSuperseded()) return;
                   this.currentSound = newSound;
                 }
 
@@ -820,8 +990,6 @@ class AudioService {
                     logPlayback('audio.ready', {
                       ...audioState(),
                       shouldPlay: isPlay,
-                      loadedSourceKind: audioSourceKind(loadedSource),
-                      sourceMatches: loadedSource ? loadedSource === url : undefined,
                       expectedDurationSeconds: track.dt ? track.dt / 1000 : undefined
                     });
                     this.updateMediaSessionMetadata(track);
@@ -830,7 +998,7 @@ class AudioService {
 
                     if (!isHotSwap) {
                       console.log('audioService: 音频完全初始化，isPlay =', isPlay);
-                      if (isPlay) {
+                      if (isPlay && canPlay()) {
                         console.log('audioService: 开始播放');
                         this.currentSound.play();
                       }
@@ -880,7 +1048,7 @@ class AudioService {
 
             soundInstance.on('play', () => {
               logPlayback('audio.play', audioState());
-              if (this.currentSound === soundInstance) {
+              if (this.currentSound === soundInstance && soundInstance.playing()) {
                 this.updateMediaSessionState(true);
                 this.emit('play');
               }
@@ -888,7 +1056,7 @@ class AudioService {
 
             soundInstance.on('pause', () => {
               logPlayback('audio.pause', audioState());
-              if (this.currentSound === soundInstance) {
+              if (this.currentSound === soundInstance && !soundInstance.playing()) {
                 this.updateMediaSessionState(false);
                 this.emit('pause');
               }
@@ -910,7 +1078,13 @@ class AudioService {
             });
           }
         } catch (error) {
-          logPlayback('audio.init-error', { ...logContext, ...playbackErrorFields(error) });
+          logPlayback('audio.init-error', {
+            ...logContext,
+            ...requestState(),
+            sourceKind,
+            elapsedMs: Math.round(performance.now() - attemptStartedAt),
+            ...playbackErrorFields(error)
+          });
           console.error('Error creating audio instance:', error);
           this.releaseOperationLock();
           reject(error);
@@ -930,6 +1104,139 @@ class AudioService {
 
   getCurrentTrack() {
     return this.currentTrack;
+  }
+
+  discardCurrentSound() {
+    const sound = this.currentSound;
+    this.currentSound = null;
+    this.currentTrack = null;
+    if (this.seekDebounceTimer) {
+      clearTimeout(this.seekDebounceTimer);
+      this.seekDebounceTimer = null;
+    }
+    this.seekLock = false;
+    if (sound) {
+      try {
+        sound.stop();
+        sound.unload();
+      } catch (error) {
+        console.error('清理旧音频失败:', error);
+      }
+    }
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'none';
+    }
+  }
+
+  getPlaybackDiagnostics(sound = this.currentSound) {
+    const context = sound ? this.audioLogContext.get(sound) : undefined;
+    const media = sound ? getMediaNode(sound) : undefined;
+    return {
+      audioRequestId: context?.requestId,
+      audioAttempt: context?.audioAttempt,
+      audioTrack: logTrack(this.currentTrack),
+      loadedTrack: context?.requested,
+      audioSourceKind: audioSourceKind(media?.currentSrc),
+      ...this.getAudioOutputDiagnostics(),
+      ...getMediaState(media)
+    };
+  }
+
+  private getAudioOutputDiagnostics() {
+    return {
+      audioContextState: this.context?.state ?? Howler.ctx?.state,
+      outputGain: this.gainNode?.gain.value,
+      eqBypassed: this.bypass,
+      customOutputDevice: this.currentSinkId !== 'default'
+    };
+  }
+
+  private watchMediaDiagnostics(
+    media: HTMLMediaElement,
+    sound: Howl,
+    audioState: () => PlaybackLogData
+  ) {
+    this.mediaLogListeners.get(media)?.abort();
+    const controller = new AbortController();
+    this.mediaLogListeners.set(media, controller);
+    let bufferingSince: number | undefined;
+    let longBufferTimer: number | undefined;
+    let firstPlaying = true;
+    let lastSampleAt = performance.now();
+
+    const clearBuffering = () => {
+      if (longBufferTimer !== undefined) window.clearTimeout(longBufferTimer);
+      longBufferTimer = undefined;
+      bufferingSince = undefined;
+    };
+    const active = () => this.currentSound === sound && sound.state() !== 'unloaded';
+
+    const onMediaEvent = (event: Event) => {
+      if (event.type === 'error' && (active() || this.pendingSound === sound)) {
+        logPlayback('audio.media-error', audioState());
+      }
+      if (!active()) {
+        clearBuffering();
+        return;
+      }
+
+      const now = performance.now();
+      if (event.type === 'timeupdate') {
+        if (!media.paused && now - lastSampleAt >= PLAYBACK_SAMPLE_MS) {
+          lastSampleAt = now;
+          logPlayback('audio.progress', audioState());
+        }
+        return;
+      }
+      if (event.type === 'stalled') {
+        logPlayback('audio.fetch-stalled', audioState());
+        return;
+      }
+      if (event.type === 'waiting') {
+        if (bufferingSince !== undefined) return;
+        bufferingSince = now;
+        logPlayback('audio.buffering', { ...audioState(), reason: event.type });
+        longBufferTimer = window.setTimeout(() => {
+          if (bufferingSince !== undefined && active() && !media.paused) {
+            logPlayback('audio.buffer-long', {
+              ...audioState(),
+              reason: event.type,
+              bufferingMs: Math.round(performance.now() - bufferingSince)
+            });
+          }
+        }, LONG_BUFFER_MS);
+        return;
+      }
+      if (event.type === 'playing' && firstPlaying) {
+        firstPlaying = false;
+        lastSampleAt = now;
+        logPlayback('audio.first-playing', audioState());
+      }
+      if (bufferingSince !== undefined) {
+        const name = event.type === 'playing' ? 'audio.buffer-resumed' : 'audio.buffer-interrupted';
+        logPlayback(name, {
+          ...audioState(),
+          reason: event.type,
+          bufferingMs: Math.round(now - bufferingSince)
+        });
+      }
+      clearBuffering();
+    };
+
+    controller.signal.addEventListener('abort', clearBuffering, { once: true });
+    const events = [
+      'waiting',
+      'stalled',
+      'playing',
+      'pause',
+      'ended',
+      'emptied',
+      'error',
+      'timeupdate'
+    ];
+    for (const event of events) {
+      media.addEventListener(event, onMediaEvent, { signal: controller.signal });
+    }
   }
 
   stop() {
@@ -972,6 +1279,10 @@ class AudioService {
 
     if (this.currentSound) {
       try {
+        logPlayback('audio.seek-requested', {
+          ...this.getPlaybackDiagnostics(),
+          targetPositionSeconds: time
+        });
         // 直接执行seek操作
         this.currentSound.seek(time);
         // 触发seek事件
@@ -1019,15 +1330,6 @@ class AudioService {
    */
   public async getAudioOutputDevices(): Promise<AudioOutputDevice[]> {
     try {
-      // 先尝试获取一个临时音频流来触发权限授予
-      // 确保 enumerateDevices 返回完整的设备信息（包括 label）
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach((track) => track.stop());
-      } catch {
-        // 即使失败也继续，可能已有权限
-      }
-
       const devices = await navigator.mediaDevices.enumerateDevices();
       const audioOutputs = devices.filter((d) => d.kind === 'audiooutput');
 

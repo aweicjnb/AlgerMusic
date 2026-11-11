@@ -96,9 +96,10 @@ export const getMusicLrc = async (id: number) => {
  */
 export const getParsingMusicUrl = async (
   id: number,
-  data: SongResult
+  data: SongResult,
+  requestId?: string
 ): Promise<MusicParseResult> => {
-  return await MusicParser.parseMusic(id, data);
+  return await MusicParser.parseMusic(id, data, requestId);
 };
 
 // 收藏歌曲

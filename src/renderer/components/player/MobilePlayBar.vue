@@ -76,7 +76,7 @@ const playerStore = usePlayerStore();
 const settingsStore = useSettingsStore();
 
 // 是否播放
-const play = computed(() => playerStore.isPlay);
+const play = computed(() => playerStore.play);
 // 背景颜色
 const background = ref('#000');
 

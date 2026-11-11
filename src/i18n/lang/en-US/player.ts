@@ -14,6 +14,8 @@ export default {
   addCorrection: 'Add {num} seconds',
   subtractCorrection: 'Subtract {num} seconds',
   playFailed: 'Play Failed, Play Next Song',
+  sourceUnavailable: 'Source unavailable. Press play to retry',
+  playbackRetry: 'Playback failed. Press play to retry',
   parseFailedPlayNext: 'Song parsing failed, playing next',
   consecutiveFailsError:
     'Playback error, possibly due to network issues or invalid source. Please switch playlist or try again later',

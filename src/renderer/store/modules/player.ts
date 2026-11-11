@@ -42,6 +42,8 @@ export const usePlayerStore = defineStore('player', () => {
     playbackRate,
     volume,
     userPlayIntent,
+    failedTrackId,
+    playbackStatus,
     isFmPlaying
   } = storeToRefs(playerCore);
 
@@ -97,6 +99,8 @@ export const usePlayerStore = defineStore('player', () => {
     playbackRate,
     volume,
     userPlayIntent,
+    failedTrackId,
+    playbackStatus,
     isFmPlaying,
 
     // PlayerCore - Computed
@@ -105,6 +109,8 @@ export const usePlayerStore = defineStore('player', () => {
 
     // PlayerCore - Actions
     setIsPlay: playerCore.setIsPlay,
+    onAudioPlaying: playerCore.onAudioPlaying,
+    onAudioPaused: playerCore.onAudioPaused,
     setMusicFull: playerCore.setMusicFull,
     setPlayMusic: playerCore.setPlayMusic,
     setPlaybackRate: playerCore.setPlaybackRate,

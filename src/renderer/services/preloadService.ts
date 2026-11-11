@@ -3,9 +3,11 @@ import { Howl } from 'howler';
 import type { SongResult } from '@/types/music';
 import { logTrack } from '@/utils/playbackLog';
 
+import { playbackSourceKey } from './playbackDecision';
+
 class PreloadService {
-  private loadingPromises: Map<string | number, Promise<Howl>> = new Map();
-  private preloadedSounds: Map<string | number, Howl> = new Map();
+  private loadingPromises: Map<string, Promise<Howl>> = new Map();
+  private preloadedSounds: Map<string, Howl> = new Map();
   private readonly loadedTracks = new WeakMap<Howl, ReturnType<typeof logTrack>>();
 
   /**
@@ -17,35 +19,36 @@ class PreloadService {
     if (!song || !song.id) {
       throw new Error('无效的歌曲对象');
     }
+    const key = playbackSourceKey(song);
 
     // 1. 检查是否有正在进行的加载
-    if (this.loadingPromises.has(song.id)) {
+    if (this.loadingPromises.has(key)) {
       console.log(`[PreloadService] 歌曲 ${song.name} 正在加载中，复用现有请求`);
-      return this.loadingPromises.get(song.id)!;
+      return this.loadingPromises.get(key)!;
     }
 
     // 2. 检查是否有已完成的缓存
-    if (this.preloadedSounds.has(song.id)) {
-      const sound = this.preloadedSounds.get(song.id)!;
+    if (this.preloadedSounds.has(key)) {
+      const sound = this.preloadedSounds.get(key)!;
       if (sound.state() === 'loaded') {
         console.log(`[PreloadService] 歌曲 ${song.name} 已预加载完成，直接使用`);
         return sound;
       } else {
         // 如果缓存的音频状态不正常，清理并重新加载
-        this.preloadedSounds.delete(song.id);
+        this.preloadedSounds.delete(key);
       }
     }
 
     // 3. 开始新的加载过程
     const loadPromise = this._performLoad(song);
-    this.loadingPromises.set(song.id, loadPromise);
+    this.loadingPromises.set(key, loadPromise);
 
     try {
       const sound = await loadPromise;
-      this.preloadedSounds.set(song.id, sound);
+      this.preloadedSounds.set(key, sound);
       return sound;
     } finally {
-      this.loadingPromises.delete(song.id);
+      this.loadingPromises.delete(key);
     }
   }
 
@@ -108,7 +111,10 @@ class PreloadService {
         preload: true,
         autoplay: false,
         onload: () => resolve(sound),
-        onloaderror: (_, err) => reject(err)
+        onloaderror: (_, err) => {
+          sound.unload();
+          reject(err);
+        }
       });
     });
   }
@@ -117,11 +123,12 @@ class PreloadService {
    * 取消特定歌曲的预加载（如果可能）
    * 注意：Promise 无法真正取消，但我们可以清理结果
    */
-  public cancel(songId: string | number) {
-    if (this.preloadedSounds.has(songId)) {
-      const sound = this.preloadedSounds.get(songId)!;
+  public cancel(song: SongResult) {
+    const key = playbackSourceKey(song);
+    if (this.preloadedSounds.has(key)) {
+      const sound = this.preloadedSounds.get(key)!;
       sound.unload();
-      this.preloadedSounds.delete(songId);
+      this.preloadedSounds.delete(key);
     }
     // loadingPromises 中的任务会继续执行，但因为 preloadedSounds 中没有记录，
     // 下次请求时会重新加载（或者我们可以让 _performLoad 检查一个取消标记，但这增加了复杂性）
@@ -130,8 +137,8 @@ class PreloadService {
   /**
    * 获取已预加载的音频实例（如果存在）
    */
-  public getPreloadedSound(songId: string | number): Howl | undefined {
-    return this.preloadedSounds.get(songId);
+  public getPreloadedSound(song: SongResult): Howl | undefined {
+    return this.preloadedSounds.get(playbackSourceKey(song));
   }
 
   /**
@@ -139,11 +146,12 @@ class PreloadService {
    * 从缓存中移除但不 unload（由调用方管理生命周期）
    * @returns 预加载的 Howl 实例，如果没有则返回 undefined
    */
-  public consume(songId: string | number): Howl | undefined {
-    const sound = this.preloadedSounds.get(songId);
+  public consume(song: SongResult): Howl | undefined {
+    const key = playbackSourceKey(song);
+    const sound = this.preloadedSounds.get(key);
     if (sound) {
-      this.preloadedSounds.delete(songId);
-      console.log(`[PreloadService] 消耗预加载的歌曲: ${songId}`);
+      this.preloadedSounds.delete(key);
+      console.log(`[PreloadService] 消耗预加载的歌曲: ${song.id}`);
       return sound;
     }
     return undefined;

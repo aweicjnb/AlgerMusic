@@ -14,6 +14,8 @@ export default {
   addCorrection: '提前 {num} 秒',
   subtractCorrection: '延遲 {num} 秒',
   playFailed: '目前歌曲播放失敗，播放下一首',
+  sourceUnavailable: '音源不可用，點擊播放重試',
+  playbackRetry: '播放失敗，點擊播放重試',
   parseFailedPlayNext: '歌曲解析失敗，播放下一首',
   consecutiveFailsError: '播放遇到錯誤，可能是網路波動或解析源失效，請切換播放清單或稍後重試',
   playMode: {

@@ -98,7 +98,10 @@
   function parseRgb(s) {
     const m = s && s.match(/rgba?\(([^)]+)\)/);
     if (!m) return null;
-    const p = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    const p = m[1]
+      .split(/[\s,/]+/)
+      .filter(Boolean)
+      .map(Number);
     return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
   }
   function isBaseSurface(c) {
@@ -113,9 +116,11 @@
   // 只处理“直接压在壁纸上”的元素：从主内容区往下找，只穿过透明的容器。
   // 大面积的纯白/纯黑底色清空；整行宽的标题栏、标签栏改成毛玻璃；其他卡片保持原样。
   function scan() {
-    if (!cfg.enabled) return;
+    if (!cfg.enabled || root.classList.contains('ct-off')) return;
     const host = document.querySelector('.layout-page .main-content');
     if (!host) return;
+    // 设置页有明确的背景层，不需要遍历表单测量布局。
+    if (host.querySelector('.settings-page')) return;
     const box = host.getBoundingClientRect();
     const hostArea = box.width * box.height;
     if (hostArea < 1) return;
@@ -158,6 +163,27 @@
   }
   let scanTimer = 0;
   let lastScan = 0;
+  let observedHost = null;
+  let contentObserver = null;
+  function observeContent() {
+    const host = document.querySelector('.layout-page .main-content');
+    if (host === observedHost) return;
+    contentObserver?.disconnect();
+    observedHost = host;
+    if (!host) return;
+    contentObserver = new MutationObserver((records) => {
+      if (root.classList.contains('ct-off')) return;
+      const changedNearPageRoot = records.some(({ target }) => {
+        let node = target;
+        for (let depth = 0; node && depth <= 4; depth++, node = node.parentElement) {
+          if (node === host) return true;
+        }
+        return false;
+      });
+      if (changedNearPageRoot) scheduleScan();
+    });
+    contentObserver.observe(host, { childList: true, subtree: true });
+  }
   function scheduleScan() {
     if (scanTimer) return;
     const wait = Math.max(0, 300 - (Date.now() - lastScan));
@@ -167,6 +193,7 @@
       try {
         ensureButton();
         ensureLift();
+        observeContent();
         scan();
       } catch (e) {
         console.warn('[custom-theme] 扫描失败', e);
@@ -269,7 +296,11 @@
       updatePanel();
     });
     document.addEventListener('mousedown', (e) => {
-      if (panel.classList.contains('ct-open') && !panel.contains(e.target) && !e.target.closest('.ct-btn')) {
+      if (
+        panel.classList.contains('ct-open') &&
+        !panel.contains(e.target) &&
+        !e.target.closest('.ct-btn')
+      ) {
         togglePanel(false);
       }
     });
@@ -301,8 +332,14 @@
   function start() {
     apply();
     refreshImage();
-    new MutationObserver(scheduleScan).observe(document.body, { childList: true, subtree: true });
-    new MutationObserver(scheduleScan).observe(root, { attributes: true, attributeFilter: ['class'] });
+    // 路由容器切换时重挂观察器，忽略歌词和列表内部频繁的深层 DOM 更新。
+    const appRoot = document.getElementById('app') || document.body;
+    new MutationObserver(scheduleScan).observe(appRoot, { childList: true });
+    observeContent();
+    new MutationObserver(scheduleScan).observe(root, {
+      attributes: true,
+      attributeFilter: ['class']
+    });
     window.addEventListener('hashchange', apply);
     window.addEventListener('resize', scheduleScan);
   }

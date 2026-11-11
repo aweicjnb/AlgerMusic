@@ -8,8 +8,10 @@ import { SongSourceConfigManager } from '@/services/SongSourceConfigManager';
 import type { ILyric, ILyricText, IWordData, SongResult } from '@/types/music';
 import { getImgUrl, isElectron } from '@/utils';
 import { getImageLinearBackground } from '@/utils/linearColor';
-import { logPlayback, playbackErrorFields } from '@/utils/playbackLog';
+import { audioSourceKind, logPlayback, playbackErrorFields } from '@/utils/playbackLog';
 import { parseLyrics as parseYrcLyrics } from '@/utils/yrcParser';
+
+import type { PlaybackLogData } from '../../shared/playbackLog';
 
 const { message } = createDiscreteApi(['message']);
 
@@ -33,7 +35,8 @@ const getSongArtistText = (songData: SongResult): string => {
 
 const resolveCachedPlaybackUrl = async (
   url: string | null | undefined,
-  songData: SongResult
+  songData: SongResult,
+  requestId?: string
 ): Promise<string | null | undefined> => {
   if (!url || !isElectron || !/^https?:\/\//i.test(url)) {
     return url;
@@ -45,13 +48,15 @@ const resolveCachedPlaybackUrl = async (
       source: songData.source,
       url,
       title: songData.name,
-      artist: getSongArtistText(songData)
+      artist: getSongArtistText(songData),
+      requestId
     })) as DiskCacheResolveResult;
 
     if (result?.url) {
       return result.url;
     }
   } catch (error) {
+    if (requestId) logPlayback('cache.resolve-error', { requestId, ...playbackErrorFields(error) });
     console.warn('解析缓存播放地址失败，回退到在线地址:', error);
   }
 
@@ -71,6 +76,49 @@ export const getSongUrl = async (
   const logSource = (route: string, reason?: string) => {
     if (requestId) logPlayback('source.route', { requestId, route, reason });
   };
+  const attempt = async <T>(
+    route: string,
+    run: () => Promise<T>,
+    summarize: (result: T) => PlaybackLogData
+  ): Promise<T> => {
+    if (!requestId) return run();
+    const startedAt = performance.now();
+    let result: T;
+    try {
+      result = await run();
+    } catch (error) {
+      logPlayback('source.attempt', {
+        requestId,
+        route,
+        outcome: 'error',
+        elapsedMs: Math.round(performance.now() - startedAt),
+        ...playbackErrorFields(error)
+      });
+      throw error;
+    }
+    logPlayback('source.attempt', {
+      requestId,
+      route,
+      elapsedMs: Math.round(performance.now() - startedAt),
+      ...summarize(result)
+    });
+    return result;
+  };
+  const resolve = (url: string | null | undefined) =>
+    resolveCachedPlaybackUrl(url, songData, requestId);
+  const parse = (route: 'configured' | 'fallback') =>
+    attempt(
+      route,
+      () => getParsingMusicUrl(numericId, cloneDeep(songData), requestId),
+      (result) => {
+        const url = result?.data?.data?.url;
+        return {
+          outcome: url ? 'url' : 'no-url',
+          sourceKind: audioSourceKind(url),
+          appCode: typeof result?.data?.code === 'number' ? result.data.code : undefined
+        };
+      }
+    );
 
   // 动态导入 settingsStore
   const { useSettingsStore } = await import('@/store/modules/settings');
@@ -84,8 +132,9 @@ export const getSongUrl = async (
     }
 
     if (songData.playMusicUrl) {
+      logSource('stored', audioSourceKind(songData.playMusicUrl));
       if (isDownloaded) return songData.playMusicUrl;
-      return await resolveCachedPlaybackUrl(songData.playMusicUrl, songData);
+      return await resolve(songData.playMusicUrl);
     }
 
     // ==================== 自定义API最优先 ====================
@@ -100,10 +149,18 @@ export const getSongUrl = async (
       console.log(`优先级 1: 尝试使用自定义API解析歌曲 ${id}...`);
       try {
         const { parseFromCustomApi } = await import('@/api/parseFromCustomApi');
-        const customResult = await parseFromCustomApi(
-          numericId,
-          cloneDeep(songData),
-          settingsStore.setData.musicQuality || 'higher'
+        const customResult = await attempt(
+          'custom',
+          () =>
+            parseFromCustomApi(
+              numericId,
+              cloneDeep(songData),
+              settingsStore.setData.musicQuality || 'higher'
+            ),
+          (result) => ({
+            outcome: result?.data?.data?.url ? 'url' : 'no-url',
+            sourceKind: audioSourceKind(result?.data?.data?.url)
+          })
         );
 
         // 验证请求
@@ -121,7 +178,7 @@ export const getSongUrl = async (
           console.log('自定义API解析成功！');
           logSource('custom');
           if (isDownloaded) return customResult.data.data as any;
-          return await resolveCachedPlaybackUrl(customResult.data.data.url, songData);
+          return await resolve(customResult.data.data.url);
         } else {
           logSource('custom', 'no-url');
           console.log('自定义API解析失败，将使用默认降级流程...');
@@ -147,7 +204,7 @@ export const getSongUrl = async (
     if (songConfig) {
       try {
         console.log(`使用自定义音源解析歌曲 ID: ${id}`);
-        const res = await getParsingMusicUrl(numericId, cloneDeep(songData));
+        const res = await parse('configured');
         console.log('res', res);
 
         // 验证请求
@@ -158,7 +215,7 @@ export const getSongUrl = async (
 
         if (res && res.data && res.data.data && res.data.data.url) {
           logSource('configured');
-          return await resolveCachedPlaybackUrl(res.data.data.url, songData);
+          return await resolve(res.data.data.url);
         }
         logSource('configured', 'no-url');
         console.warn('自定义音源解析失败，使用默认音源');
@@ -172,7 +229,25 @@ export const getSongUrl = async (
     }
 
     // 正常获取URL流程
-    const { data } = await getMusicUrl(numericId, isDownloaded);
+    const { data } = await attempt(
+      'official',
+      () => getMusicUrl(numericId, isDownloaded),
+      (result) => {
+        const detail = result?.data?.data?.[0];
+        return {
+          outcome: !detail
+            ? 'empty'
+            : !detail.url
+              ? 'no-url'
+              : detail.freeTrialInfo
+                ? 'trial'
+                : 'url',
+          appCode: typeof result?.data?.code === 'number' ? result.data.code : undefined,
+          itemCode: typeof detail?.code === 'number' ? detail.code : undefined,
+          sourceKind: audioSourceKind(detail?.url)
+        };
+      }
+    );
 
     // 验证请求
     if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
@@ -188,7 +263,7 @@ export const getSongUrl = async (
       if (hasNoUrl || isTrial) {
         logSource('fallback', hasNoUrl ? 'official-no-url' : 'official-trial');
         console.log(`官方URL无效 (无URL: ${hasNoUrl}, 试听: ${isTrial})，进入内置备用解析...`);
-        const res = await getParsingMusicUrl(numericId, cloneDeep(songData));
+        const res = await parse('fallback');
         // 验证请求
         if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
           console.log(`[getSongUrl] 备用解析后请求已失效: ${requestId}`);
@@ -196,18 +271,18 @@ export const getSongUrl = async (
         }
         if (isDownloaded) return res?.data?.data as any;
         const parsedUrl = res?.data?.data?.url || null;
-        return await resolveCachedPlaybackUrl(parsedUrl, songData);
+        return await resolve(parsedUrl);
       }
 
       console.log('官方API解析成功！');
       logSource('official');
       if (isDownloaded) return songDetail as any;
-      return await resolveCachedPlaybackUrl(songDetail.url, songData);
+      return await resolve(songDetail.url);
     }
 
     console.log('官方API返回数据结构异常，进入内置备用解析...');
     logSource('fallback', 'official-empty-response');
-    const res = await getParsingMusicUrl(numericId, cloneDeep(songData));
+    const res = await parse('fallback');
     // 验证请求
     if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
       console.log(`[getSongUrl] 备用解析后请求已失效: ${requestId}`);
@@ -215,7 +290,7 @@ export const getSongUrl = async (
     }
     if (isDownloaded) return res?.data?.data as any;
     const parsedUrl = res?.data?.data?.url || null;
-    return await resolveCachedPlaybackUrl(parsedUrl, songData);
+    return await resolve(parsedUrl);
   } catch (error) {
     if ((error as Error).message === 'Request cancelled') {
       throw error;
@@ -225,10 +300,10 @@ export const getSongUrl = async (
       logPlayback('source.error', { requestId, route: 'official', ...playbackErrorFields(error) });
     }
     logSource('fallback', 'official-error');
-    const res = await getParsingMusicUrl(numericId, cloneDeep(songData));
+    const res = await parse('fallback');
     if (isDownloaded) return res?.data?.data as any;
     const parsedUrl = res?.data?.data?.url || null;
-    return await resolveCachedPlaybackUrl(parsedUrl, songData);
+    return await resolve(parsedUrl);
   }
 };
 

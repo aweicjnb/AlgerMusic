@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 
 import axios from 'axios';
 import { app, ipcMain } from 'electron';
@@ -6,7 +7,10 @@ import Store from 'electron-store';
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { playbackErrorFields, playbackRequestIdField } from '../../shared/playbackLog';
 import { getStore } from './config';
+import { mediaSourceKey } from './mediaTransportLog';
+import { writePlaybackLog } from './playbackLog';
 
 type CacheCleanupPolicy = 'lru' | 'fifo';
 type CacheItemType = 'music' | 'lyrics';
@@ -56,6 +60,7 @@ type ResolveMusicUrlPayload = {
   url: string;
   title?: string;
   artist?: string;
+  requestId?: string;
 };
 
 type ResolveMusicUrlResult = {
@@ -751,24 +756,24 @@ class DiskCacheManager {
     this.setLyricEntries(entries);
   }
 
-  private async getCachedMusicUrl(payload: ResolveMusicUrlPayload): Promise<string | null> {
+  private async getCachedMusicUrl(payload: ResolveMusicUrlPayload) {
     const key = this.buildMusicKey(payload.songId, payload.source);
     const entries = this.getMusicEntries();
     const entry = entries[key];
-    if (!entry) return null;
+    if (!entry) return { url: null, reason: 'no-entry' };
 
     if (!fs.existsSync(entry.filePath)) {
       delete entries[key];
       this.setMusicEntries(entries);
-      return null;
+      return { url: null, reason: 'file-missing' };
     }
 
     if (entry.urlHash !== this.buildUrlHash(payload.url)) {
-      return null;
+      return { url: null, reason: 'source-changed' };
     }
 
     this.updateMusicAccess(key);
-    return this.toLocalUrl(entry.filePath);
+    return { url: this.toLocalUrl(entry.filePath), reason: 'hit', fileBytes: entry.size };
   }
 
   private async downloadAndCacheMusic(payload: ResolveMusicUrlPayload): Promise<void> {
@@ -795,6 +800,10 @@ class DiskCacheManager {
 
     const tempFilePath = path.join(musicDir, `${key}_${Date.now()}.tmp`);
     let contentType: string | undefined;
+    let stage = 'download';
+    const startedAt = performance.now();
+    const requestId = playbackRequestIdField(payload.requestId);
+    const inputMediaKey = mediaSourceKey(payload.url);
 
     try {
       const response = await axios({
@@ -809,6 +818,7 @@ class DiskCacheManager {
         typeof response.headers['content-type'] === 'string'
           ? response.headers['content-type']
           : undefined;
+      stage = 'write';
 
       const writer = fs.createWriteStream(tempFilePath);
       await new Promise<void>((resolve, reject) => {
@@ -818,6 +828,7 @@ class DiskCacheManager {
         response.data.pipe(writer);
       });
 
+      stage = 'finalize';
       const extension = this.resolveAudioExtension(payload.url, contentType);
       const filePath = path.join(musicDir, `${key}_${urlHash}${extension}`);
 
@@ -855,7 +866,26 @@ class DiskCacheManager {
       this.setMusicEntries(entries);
 
       await this.enforceCacheLimit();
+      if (requestId) {
+        writePlaybackLog('cache.downloaded', {
+          requestId,
+          songId: payload.songId,
+          inputMediaKey,
+          mediaKey: mediaSourceKey(this.toLocalUrl(filePath)),
+          fileBytes: size,
+          httpStatus: response.status,
+          elapsedMs: Math.round(performance.now() - startedAt)
+        });
+      }
     } catch (error) {
+      writePlaybackLog('cache.download-error', {
+        requestId,
+        songId: Number.isFinite(payload.songId) ? payload.songId : undefined,
+        inputMediaKey,
+        stage,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        ...playbackErrorFields(error)
+      });
       console.error(`缓存音乐失败: ${payload.songId}`, error);
       if (fs.existsSync(tempFilePath)) {
         try {
@@ -867,60 +897,103 @@ class DiskCacheManager {
     }
   }
 
-  private queueMusicCache(payload: ResolveMusicUrlPayload): void {
+  private queueMusicCache(payload: ResolveMusicUrlPayload): boolean {
     const key = this.buildMusicKey(payload.songId, payload.source);
     const task = this.pendingMusicDownloads.get(key);
-    if (task) return;
+    if (task) return false;
 
     const pendingTask = this.downloadAndCacheMusic(payload).finally(() => {
       this.pendingMusicDownloads.delete(key);
     });
     this.pendingMusicDownloads.set(key, pendingTask);
+    return true;
   }
 
   public async resolveMusicUrl(payload: ResolveMusicUrlPayload): Promise<ResolveMusicUrlResult> {
+    const requestId = playbackRequestIdField(payload?.requestId);
+    const startedAt = performance.now();
+    const report = (
+      result: ResolveMusicUrlResult,
+      reason: string,
+      fileBytes?: number,
+      downloadStarted?: boolean
+    ) => {
+      if (requestId) {
+        writePlaybackLog('cache.resolve', {
+          requestId,
+          reason,
+          songId: Number.isFinite(payload.songId) ? payload.songId : undefined,
+          inputMediaKey: mediaSourceKey(payload.url),
+          mediaKey: mediaSourceKey(result.url),
+          cached: result.cached,
+          queued: result.queued,
+          downloadStarted,
+          fileBytes,
+          elapsedMs: Math.round(performance.now() - startedAt)
+        });
+      }
+      return result;
+    };
     if (!payload || !payload.url || !payload.songId) {
-      return {
-        url: payload?.url || '',
-        cached: false,
-        queued: false
-      };
+      return report(
+        {
+          url: payload?.url || '',
+          cached: false,
+          queued: false
+        },
+        'invalid-input'
+      );
     }
 
     if (/^(local|file):\/\//i.test(payload.url)) {
-      return {
-        url: payload.url,
-        cached: true,
-        queued: false
-      };
+      return report(
+        {
+          url: payload.url,
+          cached: true,
+          queued: false
+        },
+        'already-local'
+      );
     }
 
     const config = this.getCacheConfig();
     if (!config.enabled) {
-      return {
-        url: payload.url,
-        cached: false,
-        queued: false
-      };
+      return report(
+        {
+          url: payload.url,
+          cached: false,
+          queued: false
+        },
+        'disabled'
+      );
     }
 
     await this.pruneMissingEntries();
 
-    const cachedUrl = await this.getCachedMusicUrl(payload);
-    if (cachedUrl) {
-      return {
-        url: cachedUrl,
-        cached: true,
-        queued: false
-      };
+    const cached = await this.getCachedMusicUrl(payload);
+    if (cached.url) {
+      return report(
+        {
+          url: cached.url,
+          cached: true,
+          queued: false
+        },
+        cached.reason,
+        cached.fileBytes
+      );
     }
 
-    this.queueMusicCache(payload);
-    return {
-      url: payload.url,
-      cached: false,
-      queued: true
-    };
+    const downloadStarted = this.queueMusicCache(payload);
+    return report(
+      {
+        url: payload.url,
+        cached: false,
+        queued: true
+      },
+      cached.reason,
+      undefined,
+      downloadStarted
+    );
   }
 
   public async cacheLyric(songId: number, lyricData: unknown): Promise<boolean> {

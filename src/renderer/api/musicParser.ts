@@ -5,8 +5,10 @@ import { SongSourceConfigManager } from '@/services/SongSourceConfigManager';
 import { useSettingsStore } from '@/store';
 import type { SongResult } from '@/types/music';
 import { isElectron } from '@/utils';
+import { logPlayback, playbackErrorFields } from '@/utils/playbackLog';
 import requestMusic from '@/utils/request_music';
 
+import type { PlaybackLogData } from '../../shared/playbackLog';
 import type { ParsedMusicResult } from './gdmusic';
 import { parseFromGDMusic } from './gdmusic';
 import { LxMusicStrategy } from './lxMusicStrategy';
@@ -27,6 +29,13 @@ export interface MusicParseResult {
     };
   };
 }
+
+type ParserTrace = (event: string, fields: PlaybackLogData) => void;
+
+const parseResultFields = (result?: MusicParseResult | null): PlaybackLogData => ({
+  hasUrl: Boolean(result?.data?.data?.url),
+  appCode: typeof result?.data?.code === 'number' ? result.data.code : undefined
+});
 
 /**
  * 缓存配置
@@ -55,8 +64,17 @@ export class CacheManager {
    */
   static async getCachedMusicUrl(
     id: number,
-    musicSources?: string[]
+    musicSources?: string[],
+    trace?: ParserTrace
   ): Promise<MusicParseResult | null> {
+    const startedAt = performance.now();
+    const report = (outcome: string, fields: PlaybackLogData = {}) => {
+      trace?.('source.parser-cache', {
+        outcome,
+        elapsedMs: Math.round(performance.now() - startedAt),
+        ...fields
+      });
+    };
     try {
       const cached = await getData('music_url_cache', id);
       if (
@@ -71,17 +89,24 @@ export class CacheManager {
         if (JSON.stringify(cachedSources.sort()) !== JSON.stringify(currentSources.sort())) {
           console.log(`音源配置已变更，清除歌曲 ${id} 的缓存`);
           await deleteData('music_url_cache', id);
+          report('source-config-changed');
           return null;
         }
 
         console.log(`使用缓存的音乐URL: ${id}`);
+        report(cached.data ? 'hit' : 'empty', {
+          ageMs: Date.now() - cached.createTime,
+          ...parseResultFields(cached.data)
+        });
         return cached.data;
       }
       // 清理过期缓存
       if (cached) {
         await deleteData('music_url_cache', id);
       }
+      report(cached ? 'expired' : 'miss');
     } catch (error) {
+      report('error', playbackErrorFields(error));
       console.warn('获取缓存失败:', error);
     }
     return null;
@@ -216,13 +241,18 @@ class RetryHelper {
  * @param data 歌曲数据
  * @returns 解析结果，失败时返回null
  */
-const getGDMusicAudio = async (id: number, data: SongResult): Promise<ParsedMusicResult | null> => {
+const getGDMusicAudio = async (
+  id: number,
+  data: SongResult,
+  diagnostics?: PlaybackLogData
+): Promise<ParsedMusicResult | null> => {
   try {
     const gdResult = await parseFromGDMusic(id, data, '999');
     if (gdResult) {
       return gdResult;
     }
   } catch (error) {
+    if (diagnostics) Object.assign(diagnostics, playbackErrorFields(error));
     console.error('GD音乐台解析失败:', error);
   }
   return null;
@@ -294,7 +324,8 @@ interface MusicSourceStrategy {
     id: number,
     data: SongResult,
     quality?: string,
-    sources?: string[]
+    sources?: string[],
+    diagnostics?: PlaybackLogData
   ) => Promise<MusicParseResult | null>;
 }
 
@@ -309,7 +340,13 @@ class CustomApiStrategy implements MusicSourceStrategy {
     return sources.includes('custom') && Boolean(settingsStore?.setData?.customApiPlugin);
   }
 
-  async parse(id: number, data: SongResult, quality = 'higher'): Promise<MusicParseResult | null> {
+  async parse(
+    id: number,
+    data: SongResult,
+    quality = 'higher',
+    _sources?: string[],
+    diagnostics?: PlaybackLogData
+  ): Promise<MusicParseResult | null> {
     // 检查失败缓存
     if (CacheManager.isInFailedCache(id, this.name)) {
       return null;
@@ -322,6 +359,7 @@ class CustomApiStrategy implements MusicSourceStrategy {
       });
 
       const adaptedResult = adaptParseResult(result);
+      if (diagnostics) Object.assign(diagnostics, parseResultFields(adaptedResult));
       if (adaptedResult?.data?.data?.url) {
         console.log('自定义API解析成功');
         return adaptedResult;
@@ -331,6 +369,7 @@ class CustomApiStrategy implements MusicSourceStrategy {
       CacheManager.addFailedCache(id, this.name);
       return null;
     } catch (error) {
+      if (diagnostics) Object.assign(diagnostics, playbackErrorFields(error));
       console.error('自定义API解析失败:', error);
       CacheManager.addFailedCache(id, this.name);
       return null;
@@ -349,7 +388,13 @@ class GDMusicStrategy implements MusicSourceStrategy {
     return sources.includes('gdmusic');
   }
 
-  async parse(id: number, data: SongResult): Promise<MusicParseResult | null> {
+  async parse(
+    id: number,
+    data: SongResult,
+    _quality?: string,
+    _sources?: string[],
+    diagnostics?: PlaybackLogData
+  ): Promise<MusicParseResult | null> {
     // 检查失败缓存
     if (CacheManager.isInFailedCache(id, this.name)) {
       return null;
@@ -358,10 +403,11 @@ class GDMusicStrategy implements MusicSourceStrategy {
     try {
       console.log('尝试使用GD音乐台解析...');
       const result = await RetryHelper.withRetry(async () => {
-        return await getGDMusicAudio(id, data);
+        return await getGDMusicAudio(id, data, diagnostics);
       });
 
       const adaptedResult = adaptParseResult(result);
+      if (diagnostics) Object.assign(diagnostics, parseResultFields(adaptedResult));
       if (adaptedResult?.data?.data?.url) {
         console.log('GD音乐台解析成功');
         return adaptedResult;
@@ -371,6 +417,7 @@ class GDMusicStrategy implements MusicSourceStrategy {
       CacheManager.addFailedCache(id, this.name);
       return null;
     } catch (error) {
+      if (diagnostics) Object.assign(diagnostics, playbackErrorFields(error));
       console.error('GD音乐台解析失败:', error);
       CacheManager.addFailedCache(id, this.name);
       return null;
@@ -394,7 +441,8 @@ class UnblockMusicStrategy implements MusicSourceStrategy {
     id: number,
     data: SongResult,
     _quality?: string,
-    sources?: string[]
+    sources?: string[],
+    diagnostics?: PlaybackLogData
   ): Promise<MusicParseResult | null> {
     // 检查失败缓存
     if (CacheManager.isInFailedCache(id, this.name)) {
@@ -412,6 +460,7 @@ class UnblockMusicStrategy implements MusicSourceStrategy {
       });
 
       const adaptedResult = adaptParseResult(result);
+      if (diagnostics) Object.assign(diagnostics, parseResultFields(adaptedResult));
       if (adaptedResult?.data?.data?.url) {
         console.log('UnblockMusic解析成功');
         return adaptedResult;
@@ -421,6 +470,7 @@ class UnblockMusicStrategy implements MusicSourceStrategy {
       CacheManager.addFailedCache(id, this.name);
       return null;
     } catch (error) {
+      if (diagnostics) Object.assign(diagnostics, playbackErrorFields(error));
       console.error('UnblockMusic解析失败:', error);
       CacheManager.addFailedCache(id, this.name);
       return null;
@@ -496,14 +546,43 @@ export class MusicParser {
    * @param data 歌曲数据
    * @returns 解析结果
    */
-  static async parseMusic(id: number, data: SongResult): Promise<MusicParseResult> {
+  static async parseMusic(
+    id: number,
+    data: SongResult,
+    requestId?: string
+  ): Promise<MusicParseResult> {
     const startTime = performance.now();
+    const trace: ParserTrace | undefined = requestId
+      ? (event, fields) => logPlayback(event, { requestId, ...fields })
+      : undefined;
+    const requestFallback = async (reason: string) => {
+      const startedAt = performance.now();
+      try {
+        const result = await requestMusic.get<any>('/music', { params: { id } });
+        trace?.('source.parser-fallback', {
+          reason,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          httpStatus: typeof result?.status === 'number' ? result.status : undefined,
+          ...parseResultFields(result)
+        });
+        return result;
+      } catch (error) {
+        trace?.('source.parser-fallback', {
+          reason,
+          elapsedMs: Math.round(performance.now() - startedAt),
+          hasUrl: false,
+          ...playbackErrorFields(error)
+        });
+        throw error;
+      }
+    };
+    let fallbackReason = 'strategies-exhausted';
 
     try {
       // 非Electron环境直接使用API请求
       if (!isElectron) {
         console.log('非Electron环境，使用API请求');
-        return await requestMusic.get<any>('/music', { params: { id } });
+        return await requestFallback('web');
       }
 
       // 获取设置存储
@@ -511,8 +590,9 @@ export class MusicParser {
       try {
         settingsStore = useSettingsStore();
       } catch (error) {
+        trace?.('source.parser-error', { stage: 'settings', ...playbackErrorFields(error) });
         console.error('无法获取设置存储，使用后备方案:', error);
-        return await requestMusic.get<any>('/music', { params: { id } });
+        return await requestFallback('settings-unavailable');
       }
 
       // 获取音源配置
@@ -520,7 +600,7 @@ export class MusicParser {
 
       // 检查缓存（传入音源配置用于验证缓存有效性）
       console.log(`检查歌曲 ${id} 的缓存...`);
-      const cachedResult = await CacheManager.getCachedMusicUrl(id, musicSources);
+      const cachedResult = await CacheManager.getCachedMusicUrl(id, musicSources, trace);
       if (cachedResult) {
         const endTime = performance.now();
         console.log(`✅ 命中缓存，歌曲 ${id}，耗时: ${(endTime - startTime).toFixed(2)}ms`);
@@ -531,6 +611,11 @@ export class MusicParser {
       // 检查音乐解析功能是否启用
       if (!settingsStore?.setData?.enableMusicUnblock) {
         console.log('音乐解析功能已禁用');
+        trace?.('source.parser-disabled', {
+          appCode: 404,
+          hasUrl: false,
+          elapsedMs: Math.round(performance.now() - startTime)
+        });
         return {
           data: {
             code: 404,
@@ -542,7 +627,7 @@ export class MusicParser {
 
       if (musicSources.length === 0) {
         console.warn('没有配置可用的音源，使用后备方案');
-        return await requestMusic.get<any>('/music', { params: { id } });
+        return await requestFallback('no-configured-source');
       }
 
       // 获取可用的解析策略
@@ -553,7 +638,7 @@ export class MusicParser {
 
       if (availableStrategies.length === 0) {
         console.warn('没有可用的解析策略，使用后备方案');
-        return await requestMusic.get<any>('/music', { params: { id } });
+        return await requestFallback('no-available-strategy');
       }
 
       console.log(
@@ -563,8 +648,24 @@ export class MusicParser {
 
       // 按优先级依次尝试解析策略
       for (const strategy of availableStrategies) {
+        const startedAt = performance.now();
+        const failedAt = trace ? failedCacheMap.get(`${id}_${strategy.name}`) : undefined;
+        const retryAfterMs = failedAt
+          ? Math.max(0, CACHE_CONFIG.FAILED_CACHE_TIME - (Date.now() - failedAt))
+          : 0;
+        const diagnostics: PlaybackLogData | undefined = trace ? {} : undefined;
         try {
-          const result = await strategy.parse(id, data, quality, musicSources);
+          const result = await strategy.parse(id, data, quality, musicSources, diagnostics);
+          const hasUrl = Boolean(result?.data?.data?.url);
+          const failureOutcome = diagnostics?.errorType ? 'error' : 'no-url';
+          trace?.('source.parser-strategy', {
+            strategy: strategy.name,
+            elapsedMs: Math.round(performance.now() - startedAt),
+            outcome: hasUrl ? 'resolved' : retryAfterMs ? 'negative-cache' : failureOutcome,
+            retryAfterMs: retryAfterMs || undefined,
+            ...parseResultFields(result),
+            ...diagnostics
+          });
           if (result?.data?.data?.url) {
             const endTime = performance.now();
             console.log(
@@ -578,6 +679,13 @@ export class MusicParser {
           }
           console.log(`策略 ${strategy.name} 解析失败，继续尝试下一个策略`);
         } catch (error) {
+          trace?.('source.parser-strategy', {
+            strategy: strategy.name,
+            elapsedMs: Math.round(performance.now() - startedAt),
+            outcome: 'error',
+            hasUrl: false,
+            ...playbackErrorFields(error)
+          });
           console.error(`策略 ${strategy.name} 解析异常:`, error);
           // 继续尝试下一个策略
         }
@@ -585,13 +693,15 @@ export class MusicParser {
 
       console.warn('所有解析策略都失败了，使用后备方案');
     } catch (error) {
+      fallbackReason = 'parser-error';
+      trace?.('source.parser-error', { stage: 'parse', ...playbackErrorFields(error) });
       console.error('MusicParser.parseMusic 执行异常，使用后备方案:', error);
     }
 
     // 后备方案：使用API请求
     try {
       console.log('使用后备方案：API请求');
-      const result = await requestMusic.get<any>('/music', { params: { id } });
+      const result = await requestFallback(fallbackReason);
 
       // 如果后备方案成功，也进行缓存
       if (result?.data?.data?.url) {

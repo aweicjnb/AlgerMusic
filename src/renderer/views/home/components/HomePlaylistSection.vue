@@ -53,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowSize } from '@vueuse/core';
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
@@ -89,9 +90,12 @@ const router = useRouter();
 const playlists = ref<any[]>([]);
 const loading = ref(true);
 const playlistTracksMap = reactive<Record<number, any[]>>({});
+const { width: windowWidth } = useWindowSize();
 
 const effectiveColumns = computed(() =>
-  isMobile.value ? Math.min(2, props.columns) : props.columns
+  isMobile.value
+    ? Math.min(2, props.columns)
+    : Math.min(props.columns, Math.max(2, Math.floor((windowWidth.value - 140) / 220)))
 );
 const effectiveRows = computed(() => (isMobile.value ? 2 : props.rows));
 

@@ -19,6 +19,7 @@ import {
 import { audioService } from '@/services/audioService';
 import { usePlayerStore } from '@/store/modules/player';
 import { useSettingsStore } from '@/store/modules/settings';
+import { logPlayback } from '@/utils/playbackLog';
 
 // 全屏歌词的“浮名”动画（代码来自 Folia，见 src/renderer/folia/NOTICE.md）
 const props = defineProps<{ mode: FoliaStyle }>();
@@ -60,9 +61,66 @@ let handle: FoliaStageHandle | null = null;
 let frameId = 0;
 let lineIndex = -1;
 let disposed = false;
+let frameWindowStart = 0;
+let previousFrameAt = 0;
+let frameCount = 0;
+let totalFrameMs = 0;
+let slowFrameCount = 0;
+let longestFrameMs = 0;
+let sampledStyle = props.mode;
 
-const tick = () => {
+const reportFrameSample = () => {
+  if (frameCount < 60 || totalFrameMs <= 0) return;
+  logPlayback('visualizer.frame-sample', {
+    style: sampledStyle,
+    frames: frameCount,
+    averageFps: Math.round((frameCount * 1000) / totalFrameMs),
+    slowFramesOver50Ms: slowFrameCount,
+    longestFrameMs: Math.round(longestFrameMs)
+  });
+};
+const resetFrameSample = () => {
+  previousFrameAt = 0;
+  frameWindowStart = 0;
+  frameCount = 0;
+  totalFrameMs = 0;
+  slowFrameCount = 0;
+  longestFrameMs = 0;
+};
+const flushFrameSample = () => {
+  reportFrameSample();
+  resetFrameSample();
+};
+
+const sampleFrame = (frameAt: number) => {
+  if (!playerStore.isPlay || document.hidden) {
+    previousFrameAt = 0;
+    frameWindowStart = 0;
+    return;
+  }
+  if (!previousFrameAt) {
+    frameWindowStart = frameAt;
+  } else {
+    const frameMs = frameAt - previousFrameAt;
+    frameCount++;
+    totalFrameMs += frameMs;
+    if (frameMs > 50) slowFrameCount++;
+    longestFrameMs = Math.max(longestFrameMs, frameMs);
+  }
+  previousFrameAt = frameAt;
+  if (frameAt - frameWindowStart >= 30_000) {
+    reportFrameSample();
+    frameWindowStart = frameAt;
+    frameCount = 0;
+    totalFrameMs = 0;
+    slowFrameCount = 0;
+    longestFrameMs = 0;
+  }
+};
+
+const tick = (frameAt: number) => {
   if (!handle) return;
+  sampleFrame(frameAt);
   const elapsed = playerStore.isPlay
     ? Math.min(performance.now() - syncedAt, MAX_EXTRAPOLATION_MS) / 1000
     : 0;
@@ -79,6 +137,8 @@ const tick = () => {
 watch(
   () => props.mode,
   (mode) => {
+    flushFrameSample();
+    sampledStyle = mode;
     audioService.releaseLyricSpectrum();
     handle?.setState({ mode });
   }
@@ -96,6 +156,7 @@ watch([lines, theme, songKey], () => {
 watch(song, (value) => handle?.setState({ song: value }));
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', flushFrameSample);
   document.documentElement.classList.add('folia-stage');
   // React 和动画代码体积较大，用到时才加载
   const { mountFoliaStage } = await import('@/folia/mount');
@@ -116,6 +177,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  reportFrameSample();
+  document.removeEventListener('visibilitychange', flushFrameSample);
   document.documentElement.classList.remove('folia-stage');
   disposed = true;
   stopTimeWatch();

@@ -39,7 +39,7 @@
         lazy
         preview-disabled
       />
-      <div v-if="playMusic?.playLoading" class="loading-overlay">
+      <div v-if="playerStore.playbackStatus === 'loading'" class="loading-overlay">
         <i class="ri-loader-4-line loading-icon"></i>
       </div>
       <div class="hover-arrow">
@@ -62,7 +62,12 @@
         </n-ellipsis>
         <span v-if="playbackRate !== 1.0" class="playback-rate-badge"> {{ playbackRate }}x </span>
       </div>
-      <div class="music-content-name">
+      <div v-if="playbackFailed" class="music-content-name truncate text-red-500 dark:text-red-300">
+        {{
+          t(playerStore.failedTrackId != null ? 'player.sourceUnavailable' : 'player.playbackRetry')
+        }}
+      </div>
+      <div v-else class="music-content-name">
         <n-ellipsis
           class="text-ellipsis"
           line-clamp="1"
@@ -193,7 +198,8 @@ const settingsStore = useSettingsStore();
 const { t } = useI18n();
 const message = useMessage();
 // 是否播放
-const play = computed(() => playerStore.isPlay);
+const play = computed(() => playerStore.play);
+const playbackFailed = computed(() => playerStore.playbackStatus === 'failed');
 // 背景颜色
 const background = ref('#000');
 
@@ -310,10 +316,7 @@ const showSliderTooltip = ref(false);
 // 播放暂停按钮事件
 const playMusicEvent = async () => {
   try {
-    const result = await playerStore.setPlay({ ...playMusic.value });
-    if (result) {
-      playerStore.setPlayMusic(true);
-    }
+    await playerStore.setPlay({ ...playMusic.value });
   } catch (error) {
     console.error('重新获取播放链接失败:', error);
     message.error(t('player.playFailed'));

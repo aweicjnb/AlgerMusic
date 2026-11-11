@@ -10,7 +10,7 @@
     @change="handleTypeChange"
     @scroll="handleScroll"
   >
-    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-6">
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
       <!-- Loading State -->
       <template v-if="loading && page === 0">
         <div v-for="i in 15" :key="`loading-${i}`" class="space-y-3">
@@ -68,7 +68,8 @@
           <!-- Info -->
           <div class="mt-3 space-y-1">
             <h3
-              class="text-sm md:text-base font-bold text-neutral-900 dark:text-white line-clamp-1 group-hover:text-primary transition-colors"
+              class="text-sm md:text-base font-bold text-neutral-900 dark:text-white line-clamp-2 min-h-12 group-hover:text-primary transition-colors"
+              :title="item.name"
             >
               {{ item.name }}
             </h3>
@@ -95,8 +96,8 @@ import { useRoute, useRouter } from 'vue-router';
 
 import { getPlaylistCategory } from '@/api/home';
 import { getListByCat } from '@/api/list';
-import StickyTabPage from '@/components/common/StickyTabPage.vue';
 import { navigateToMusicList } from '@/components/common/MusicListNavigator';
+import StickyTabPage from '@/components/common/StickyTabPage.vue';
 import type { IPlayListSort } from '@/types/playlist';
 import { calculateAnimationDelay, formatNumber, getImgUrl } from '@/utils';
 

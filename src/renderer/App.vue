@@ -138,8 +138,7 @@ onMounted(async () => {
 
   // 初始化 MusicHook，注入 playerStore
   initMusicHook(playerStore);
-  // 初始化播放状态
-  await playerStore.initializePlayState();
+  await initAudioListeners();
 
   // 初始化音频设备变化监听器
   playerCoreStore.initAudioDeviceListener();
@@ -162,11 +161,13 @@ onMounted(async () => {
     }
   }
 
-  // 如果有正在播放的音乐，则初始化音频监听器
+  // 音源准备好后再恢复，避免启动解析时落雪运行器尚未就绪。
+  await playerStore.initializePlayState();
+
+  // 把恢复后的歌曲信息同步给桌面歌词窗口。
   if (playerStore.playMusic && playerStore.playMusic.id) {
-    // 使用 nextTick 确保 DOM 更新后再初始化
+    // 使用 nextTick 确保歌曲信息已更新。
     await nextTick();
-    initAudioListeners();
     if (isElectron) {
       window.api.sendSong(cloneDeep(playerStore.playMusic));
     }

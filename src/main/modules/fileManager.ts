@@ -11,7 +11,10 @@ import * as NodeID3 from 'node-id3';
 import * as os from 'os';
 import * as path from 'path';
 
+import { playbackErrorFields } from '../../shared/playbackLog';
 import { getStore } from './config';
+import { mediaSourceKey } from './mediaTransportLog';
+import { writePlaybackLog } from './playbackLog';
 
 const MAX_CONCURRENT_DOWNLOADS = 3;
 const downloadQueue: { url: string; filename: string; songInfo: any; type?: string }[] = [];
@@ -41,7 +44,9 @@ const sentNotifications = new Map();
  */
 export function initializeFileManager() {
   // 注册本地文件协议
+  const loggedLocalSources = new Set<string>();
   protocol.registerFileProtocol('local', (request, callback) => {
+    const mediaKey = mediaSourceKey(request.url);
     try {
       const url = request.url;
       // local://C:/Users/xxx.mp3
@@ -57,14 +62,44 @@ export function initializeFileManager() {
 
       // 检查文件是否存在
       if (!fs.existsSync(filePath)) {
-        console.error('File not found:', filePath);
+        writePlaybackLog('transport.local-file', {
+          mediaKey,
+          available: false,
+          netError: 'net::ERR_FILE_NOT_FOUND'
+        });
+        console.error('Local media file not found');
         callback({ error: -6 }); // net::ERR_FILE_NOT_FOUND
         return;
       }
 
       callback({ path: filePath });
+      if (mediaKey && !loggedLocalSources.has(mediaKey)) {
+        if (loggedLocalSources.size >= 256)
+          loggedLocalSources.delete(loggedLocalSources.values().next().value!);
+        loggedLocalSources.add(mediaKey);
+        void fs.promises.stat(filePath).then(
+          (file) =>
+            writePlaybackLog('transport.local-file', {
+              mediaKey,
+              available: true,
+              isFile: file.isFile(),
+              fileBytes: file.size
+            }),
+          (error) =>
+            writePlaybackLog('transport.local-file', {
+              mediaKey,
+              available: false,
+              ...playbackErrorFields(error)
+            })
+        );
+      }
     } catch (error) {
-      console.error('Error handling local protocol:', error);
+      writePlaybackLog('transport.local-file', {
+        mediaKey,
+        available: false,
+        ...playbackErrorFields(error)
+      });
+      console.error('Error handling local protocol');
       callback({ error: -2 }); // net::FAILED
     }
   });
@@ -514,7 +549,7 @@ async function downloadMusic(
 
     // 先获取文件大小
     const headResponse = await axios.head(url);
-    const totalSize = parseInt(headResponse.headers['content-length'] || '0', 10);
+    const totalSize = parseInt(String(headResponse.headers['content-length'] || '0'), 10);
 
     // 开始下载到临时文件
     const response = await axios({

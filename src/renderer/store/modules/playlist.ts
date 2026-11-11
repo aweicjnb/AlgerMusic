@@ -6,6 +6,7 @@ import { computed, ref, shallowRef, triggerRef } from 'vue';
 
 import i18n from '@/../i18n/renderer';
 import { useSongDetail } from '@/hooks/usePlayerHooks';
+import { isCurrentPlaybackAttempt } from '@/services/playbackDecision';
 import { preloadService } from '@/services/preloadService';
 import type { SongResult } from '@/types/music';
 import { getImgUrl } from '@/utils';
@@ -640,26 +641,36 @@ export const usePlaylistStore = defineStore(
           !song.isFirstPlay
         ) {
           if (playerCore.play) {
-            playerCore.setPlayMusic(false);
+            await playerCore.setPlayMusic(false);
             const { audioService } = await import('@/services/audioService');
             audioService.getCurrentSound()?.pause();
-            playerCore.userPlayIntent = false;
           } else {
-            playerCore.setPlayMusic(true);
-            playerCore.userPlayIntent = true;
             const { audioService } = await import('@/services/audioService');
             const sound = audioService.getCurrentSound();
+            const audioTrack = audioService.getCurrentTrack();
+            const audioMatches = Boolean(
+              sound?.state() === 'loaded' &&
+              isCurrentPlaybackAttempt({
+                currentRequestId: null,
+                selectedTrack: playerCore.playMusic,
+                audioTrack,
+                expectedSound: sound,
+                currentSound: audioService.getCurrentSound()
+              })
+            );
             logPlayback('playlist.resume', {
               selected: logTrack(playerCore.playMusic),
-              audioTrack: logTrack(audioService.getCurrentTrack()),
-              hasSound: Boolean(sound)
+              audioTrack: logTrack(audioTrack),
+              hasSound: Boolean(sound),
+              audioMatches
             });
-            if (sound) {
+            if (audioMatches && sound) {
+              await playerCore.setPlayMusic(true);
               sound.play();
               // 在恢复播放时也进行状态检测，防止URL已过期导致无声
               playerCore.checkPlaybackState(playerCore.playMusic);
             } else {
-              console.warn('[PlaylistStore.setPlay] 无可用音频实例，尝试重建播放链路');
+              console.warn('[PlaylistStore.setPlay] 当前音频与所选歌曲不匹配，重建播放链路');
               const recoverSong = {
                 ...playerCore.playMusic,
                 isFirstPlay: true,
@@ -697,8 +708,6 @@ export const usePlaylistStore = defineStore(
         // playerCore 的状态由其自己的 store 管理
 
         if (success) {
-          playerCore.isPlay = true;
-
           // 预加载下一首歌曲
           if (songIndex !== -1) {
             setTimeout(() => {

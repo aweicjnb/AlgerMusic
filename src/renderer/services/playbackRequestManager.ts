@@ -81,7 +81,7 @@ class PlaybackRequestManager {
       return false;
     }
 
-    if (request.status === RequestStatus.CANCELLED) {
+    if (request.status === RequestStatus.CANCELLED || request.status === RequestStatus.FAILED) {
       console.warn(`[PlaybackRequestManager] 请求已被取消: ${requestId}`);
       return false;
     }
@@ -187,7 +187,7 @@ class PlaybackRequestManager {
     }
 
     // 检查请求状态
-    if (request.status === RequestStatus.CANCELLED) {
+    if (request.status === RequestStatus.CANCELLED || request.status === RequestStatus.FAILED) {
       console.warn(`[PlaybackRequestManager] 请求已被取消: ${requestId}`);
       return false;
     }

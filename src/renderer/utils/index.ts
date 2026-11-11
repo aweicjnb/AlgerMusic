@@ -100,7 +100,7 @@ export const isLyricWindow = computed(() => {
 });
 
 export const getSetData = (): any => {
-  let setData = null;
+  let setData: ReturnType<typeof useSettingsStore>['setData'] | null = null;
   if (window.electron) {
     setData = window.electron.ipcRenderer.sendSync('get-store-value', 'set');
   } else {

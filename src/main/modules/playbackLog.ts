@@ -6,7 +6,7 @@ import { app, ipcMain, type WebContents } from 'electron';
 
 import { PLAYBACK_LOG_CHANNEL, type PlaybackLogData } from '../../shared/playbackLog';
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_BYTES = 4096;
 const MAX_PENDING_WRITES = 128;
 const sessionId = randomUUID();
@@ -15,13 +15,36 @@ let writeQueue = Promise.resolve();
 let pendingWrites = 0;
 let directoryReady = false;
 let writeFailed = false;
+let sequence = 0;
+let dropped = 0;
 
-export function writePlaybackLog(event: string, data: PlaybackLogData = {}): void {
-  if (pendingWrites >= MAX_PENDING_WRITES) return;
+export function writePlaybackLog(
+  event: string,
+  data: PlaybackLogData = {},
+  origin: 'main' | 'renderer' = 'main'
+): void {
+  const seq = ++sequence;
+  if (pendingWrites >= MAX_PENDING_WRITES) {
+    dropped++;
+    return;
+  }
 
-  const line = JSON.stringify({ time: new Date().toISOString(), sessionId, event, data }) + '\n';
+  const line =
+    JSON.stringify({
+      time: new Date().toISOString(),
+      sessionId,
+      seq,
+      origin,
+      droppedBefore: dropped || undefined,
+      event,
+      data
+    }) + '\n';
   const lineBytes = Buffer.byteLength(line);
-  if (lineBytes > MAX_LINE_BYTES) return;
+  if (lineBytes > MAX_LINE_BYTES) {
+    dropped++;
+    return;
+  }
+  dropped = 0;
 
   pendingWrites++;
   writeQueue = writeQueue
@@ -70,7 +93,7 @@ export function initializePlaybackLog(getMainContents: () => WebContents | undef
 
     // IPC 参数来自界面，序列化失败也不能影响播放或主进程。
     try {
-      writePlaybackLog(name, data as PlaybackLogData);
+      writePlaybackLog(name, data as PlaybackLogData, 'renderer');
     } catch {
       // 忽略无法序列化的日志。
     }
