@@ -33,6 +33,11 @@ export default {
     list: '自動播放下一個'
   },
   lrc: {
+    loading: '正在載入歌詞…',
+    autoRetrying: '正在自動重試歌詞（{attempt}/{total}）…',
+    loadFailed: '歌詞載入失敗',
+    retry: '重試歌詞',
+    refresh: '重新取得',
     noLrc: '暫無歌詞, 請欣賞',
     noAutoScroll: '本歌詞不支持自動滾動'
   },

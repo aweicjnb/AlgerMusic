@@ -143,7 +143,7 @@ const onPlayMusic = () => {
   border-radius: 0.75rem; /* rounded-xl */
 
   &:hover {
-    background-color: rgb(249 250 251); /* bg-gray-50 */
+    background-color: var(--app-surface-hover);
   }
 
   .song-item-img {
@@ -176,8 +176,8 @@ const onPlayMusic = () => {
     margin-left: 1rem; /* ml-4 */
     padding-left: 0.5rem; /* pl-2 */
     border-width: 1px;
-    border-color: rgb(229 231 235); /* border-gray-200 */
-    background-color: #fff; /* bg-light fallback */
+    border-color: transparent;
+    background-color: var(--app-surface-muted);
 
     .iconfont {
       font-size: 1rem; /* text-base */
@@ -230,10 +230,6 @@ const onPlayMusic = () => {
 
 /* dark mode */
 .dark .mini-song-item {
-  &:hover {
-    background-color: rgb(31 41 55); /* dark:bg-gray-800 */
-  }
-
   .song-item-content {
     &-title {
       color: white;
@@ -245,9 +241,6 @@ const onPlayMusic = () => {
   }
 
   .song-item-operating {
-    border-color: rgb(55 65 81); /* dark:border-gray-700 */
-    background-color: black; /* dark:bg-black */
-
     &-like .icon-likefill {
       color: rgb(156 163 175); /* dark:text-gray-400 */
     }

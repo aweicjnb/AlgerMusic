@@ -1,5 +1,6 @@
 import type { SongResult } from '@/types/music';
 
+import { playbackMediaUrl } from '../../shared/localMedia';
 import {
   PLAYBACK_LOG_CHANNEL,
   PLAYBACK_MEDIA_CHANNEL,
@@ -11,7 +12,14 @@ export { playbackErrorFields } from '../../shared/playbackLog';
 
 export function logPlayback(event: string, data: PlaybackLogData = {}): void {
   try {
-    window.electron?.ipcRenderer.send(PLAYBACK_LOG_CHANNEL, event, data);
+    const now = performance.now();
+    window.electron?.ipcRenderer.send(PLAYBACK_LOG_CHANNEL, event, {
+      ...data,
+      rendererTimeMs: Math.round(now),
+      rendererEpochMs: Math.round(performance.timeOrigin + now),
+      pageVisibility: document.visibilityState,
+      windowFocused: document.hasFocus()
+    });
   } catch {
     // 窗口关闭或 IPC 不可用时，诊断日志不应中断播放。
   }
@@ -30,8 +38,8 @@ export function bindPlaybackMedia(
       PLAYBACK_MEDIA_CHANNEL,
       requestId,
       audioAttempt,
-      requestedUrl,
-      loadedUrl
+      playbackMediaUrl(requestedUrl),
+      loadedUrl ? playbackMediaUrl(loadedUrl) : undefined
     );
   } catch {
     // Media playback must work without diagnostic IPC.

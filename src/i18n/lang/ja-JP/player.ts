@@ -34,6 +34,11 @@ export default {
     list: '自動で次の曲を再生'
   },
   lrc: {
+    loading: '歌詞を読み込み中…',
+    autoRetrying: '歌詞を自動で再試行中（{attempt}/{total}）…',
+    loadFailed: '歌詞を読み込めませんでした',
+    retry: '歌詞を再試行',
+    refresh: '再取得',
     noLrc: '歌詞がありません。お楽しみください',
     noAutoScroll: '本歌詞は自動スクロールをサポートしていません'
   },

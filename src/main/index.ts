@@ -1,5 +1,5 @@
 import { electronApp, optimizer } from '@electron-toolkit/utils';
-import { app, ipcMain, nativeImage, session } from 'electron';
+import { app, ipcMain, nativeImage, powerMonitor, session } from 'electron';
 import { join } from 'path';
 
 import type { Language } from '../i18n/main';
@@ -64,6 +64,19 @@ function initialize(configStore: any) {
   });
   mainWindow.on('unresponsive', () => writePlaybackLog('app.window-unresponsive'));
   mainWindow.on('responsive', () => writePlaybackLog('app.window-responsive'));
+  const reportWindowState = (reason: string) =>
+    writePlaybackLog('app.window-state', {
+      reason,
+      visible: mainWindow.isVisible(),
+      minimized: mainWindow.isMinimized(),
+      focused: mainWindow.isFocused()
+    });
+  mainWindow.on('show', () => reportWindowState('show'));
+  mainWindow.on('hide', () => reportWindowState('hide'));
+  mainWindow.on('minimize', () => reportWindowState('minimize'));
+  mainWindow.on('restore', () => reportWindowState('restore'));
+  mainWindow.on('focus', () => reportWindowState('focus'));
+  mainWindow.on('blur', () => reportWindowState('blur'));
 
   // 初始化托盘
   initializeTray(iconPath, mainWindow);
@@ -127,14 +140,22 @@ if (!isSingleInstance) {
     initializeMediaTransportLog(session.defaultSession, () => mainWindow?.webContents);
     writePlaybackLog('app.start', {
       version: app.getVersion(),
-      diagnosticsVersion: 2,
+      diagnosticsVersion: 3,
       electronVersion: process.versions.electron,
       platform: process.platform,
       arch: process.arch
     });
+    powerMonitor.on('suspend', () => writePlaybackLog('app.system-power', { reason: 'suspend' }));
+    powerMonitor.on('resume', () => writePlaybackLog('app.system-power', { reason: 'resume' }));
     app.on('child-process-gone', (_, details) => {
       if (details.type === 'GPU') {
         writePlaybackLog('app.gpu-exit', { reason: details.reason, exitCode: details.exitCode });
+      }
+      if (details.type === 'Utility') {
+        writePlaybackLog('app.utility-exit', {
+          reason: details.reason,
+          exitCode: details.exitCode
+        });
       }
     });
 

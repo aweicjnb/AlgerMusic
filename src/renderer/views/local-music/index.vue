@@ -134,7 +134,7 @@
             v-if="!localMusicStore.scanning && filteredList.length === 0"
             class="empty-state py-20 text-center"
           >
-            <i class="ri-folder-music-fill text-5xl mb-4 text-neutral-200 dark:text-neutral-800" />
+            <i class="ri-folder-music-fill text-5xl mb-4 text-neutral-400 dark:text-neutral-500" />
             <p class="text-neutral-400">{{ t('localMusic.emptyState') }}</p>
             <button
               class="mt-6 px-6 py-2 rounded-full bg-primary text-white text-sm font-medium hover:bg-primary/90 transition-all"

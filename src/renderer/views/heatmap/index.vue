@@ -23,7 +23,7 @@
           <p class="loading-text">{{ t('history.heatmap.loading') }}</p>
         </div>
 
-        <div v-else-if="heatmapData.length > 0" class="heatmap-container">
+        <div v-else-if="heatmapData.length > 0" class="heatmap-container app-panel">
           <!-- 颜色主题选择器 -->
           <div class="color-theme-selector">
             <span class="selector-label">{{ t('history.heatmap.colorTheme') }}:</span>
@@ -446,7 +446,7 @@ onMounted(() => {
       .stat-item {
         @apply flex items-center gap-2 justify-center;
         @apply px-4 py-2 rounded-lg;
-        @apply bg-gray-50 dark:bg-gray-800;
+        background-color: var(--app-control-surface);
 
         .stat-label {
           @apply text-sm;
@@ -477,7 +477,7 @@ onMounted(() => {
     }
 
     .heatmap-container {
-      @apply bg-white dark:bg-dark-300 rounded-2xl p-6 shadow-lg;
+      @apply rounded-2xl p-6;
 
       .color-theme-selector {
         @apply flex items-center gap-4 mb-6 pb-4;
@@ -577,9 +577,8 @@ onMounted(() => {
 
         .stat-card {
           @apply flex items-start gap-4 p-4 rounded-xl;
-          @apply bg-gradient-to-br from-gray-50 to-gray-100;
-          @apply dark:from-gray-800 dark:to-gray-900;
-          @apply border border-gray-200 dark:border-gray-700;
+          background-color: var(--app-surface-muted);
+          border: 1px solid var(--app-surface-border);
           @apply transition-all duration-300;
           @apply hover:shadow-lg hover:scale-105;
 

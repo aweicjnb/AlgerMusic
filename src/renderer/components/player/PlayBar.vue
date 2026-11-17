@@ -103,8 +103,8 @@
         <div class="volume-icon" @click="mute">
           <i class="iconfont" :class="getVolumeIcon"></i>
         </div>
-        <div class="volume-slider">
-          <div class="volume-percentage">{{ Math.round(volumeSlider) }}%</div>
+        <div class="volume-slider app-popup">
+          <div class="volume-percentage app-popup">{{ Math.round(volumeSlider) }}%</div>
           <n-slider v-model:value="volumeSlider" :step="0.01" :tooltip="false" vertical></n-slider>
         </div>
       </div>
@@ -456,12 +456,8 @@ const openPlayListDrawer = () => {
 
   .volume-slider {
     @apply absolute opacity-0 invisible transition-all duration-300 bottom-[30px] left-1/2 -translate-x-1/2 h-[180px] px-2 py-4 rounded-xl;
-    @apply bg-light dark:bg-dark-200;
-    @apply border border-gray-200 dark:border-gray-700;
-
     .volume-percentage {
-      @apply absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-medium bg-light dark:bg-dark-200 px-2 py-1 rounded-md;
-      @apply border border-gray-200 dark:border-gray-700;
+      @apply absolute -top-6 left-1/2 -translate-x-1/2 text-xs font-medium px-2 py-1 rounded-md;
       @apply text-gray-800 dark:text-white;
       white-space: nowrap;
     }

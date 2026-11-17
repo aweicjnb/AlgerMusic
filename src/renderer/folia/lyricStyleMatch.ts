@@ -1,5 +1,6 @@
 import type { ILyric } from '@/types/music';
 
+import { rhythmPace, type RhythmSummary } from '../services/rhythmAnalysis';
 import { getLyricTags, type LyricMood, type LyricTopic } from './lyricTags';
 import { FOLIA_STYLES, type FoliaStyle } from './styles';
 
@@ -78,9 +79,34 @@ const MOOD_WEIGHT = 3;
 const MIN_MATCH_SCORE = 0.5;
 const MAX_TIED_STYLES = 3;
 
+// Pace affinity and preferred energy (0..1). Audio refines atmosphere; it does not infer emotion.
+const RHYTHM_PROFILES: Record<
+  Exclude<FoliaStyle, 'minions'>,
+  { pace: [number, number, number]; energy: number }
+> = {
+  fume: { pace: [0.4, 0.7, 0], energy: 0.5 },
+  classic: { pace: [0.6, 0.6, 0], energy: 0.4 },
+  tilt: { pace: [0.8, 0.4, -0.4], energy: 0.35 },
+  partita: { pace: [0.1, 0.8, 0.4], energy: 0.6 },
+  claddagh: { pace: [0.2, 0.7, 0.2], energy: 0.55 },
+  cadenza: { pace: [0.8, 0.3, -0.3], energy: 0.35 },
+  still: { pace: [1, 0, -0.9], energy: 0.2 },
+  sonnet: { pace: [-0.7, 0.3, 1], energy: 0.85 },
+  hanabi: { pace: [-0.4, 0.5, 1], energy: 0.8 },
+  monet: { pace: [0.9, 0.4, -0.4], energy: 0.35 },
+  pendolo: { pace: [0.4, 0.9, 0.1], energy: 0.5 },
+  diorama: { pace: [-0.3, 0.6, 0.9], energy: 0.75 },
+  nebbia: { pace: [1, 0.1, -0.7], energy: 0.25 },
+  cappella: { pace: [0.2, 0.8, 0.5], energy: 0.55 },
+  lumiere: { pace: [1, 0.2, -0.6], energy: 0.25 },
+  tempera: { pace: [-0.6, 0.4, 1], energy: 0.85 },
+  machi: { pace: [0.1, 0.8, 0.5], energy: 0.55 }
+};
+
 export interface LyricStyleChoice {
   style: FoliaStyle;
   matchedTags: string[];
+  rhythmApplied?: boolean;
 }
 
 function pickStyle<T extends { style: FoliaStyle }>(
@@ -94,11 +120,15 @@ function pickStyle<T extends { style: FoliaStyle }>(
 }
 
 export function matchLyricStyle(
-  lyric: ILyric | string,
+  lyric: ILyric | string | undefined,
   previous?: FoliaStyle,
-  random = Math.random
+  random = Math.random,
+  rhythm?: RhythmSummary
 ): LyricStyleChoice {
   const { moods, themes } = getLyricTags(lyric);
+  const rhythmApplied =
+    rhythm?.status === 'ready' && rhythm.bpm !== null && rhythm.confidence >= 0.62;
+  const pace = rhythmApplied ? rhythmPace(rhythm.bpm!) : undefined;
   const ranked = FOLIA_STYLES.flatMap(({ value: style }) => {
     if (style === 'minions') return [];
     const profile = STYLE_PROFILES[style];
@@ -112,6 +142,19 @@ export function matchLyricStyle(
         score: (profile.themes[key] ?? 0) * confidence
       }))
     ];
+    if (pace && rhythm) {
+      const audioProfile = RHYTHM_PROFILES[style];
+      contributions.push(
+        {
+          label: { slow: '舒缓节奏', medium: '中速节奏', fast: '快节奏' }[pace],
+          score: audioProfile.pace[{ slow: 0, medium: 1, fast: 2 }[pace]] * 1.6 * rhythm.confidence
+        },
+        {
+          label: rhythm.energy >= 0.65 ? '有力伴奏' : rhythm.energy < 0.4 ? '轻柔伴奏' : '适中能量',
+          score: (1 - Math.abs(rhythm.energy - audioProfile.energy) * 2) * 0.7 * rhythm.confidence
+        }
+      );
+    }
     return [
       {
         style,
@@ -124,7 +167,7 @@ export function matchLyricStyle(
   const best = ranked[0];
   if (best.score < MIN_MATCH_SCORE) {
     const { style } = pickStyle(ranked, previous, random);
-    return { style, matchedTags: [] };
+    return { style, matchedTags: [], rhythmApplied };
   }
 
   // Shuffle only among close matches. A clear winner may suit two songs in a row.
@@ -138,5 +181,5 @@ export function matchLyricStyle(
     .sort((a, b) => b.score - a.score)
     .slice(0, 3)
     .map(({ label }) => label);
-  return { style: chosen.style, matchedTags };
+  return { style: chosen.style, matchedTags, rhythmApplied };
 }

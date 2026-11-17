@@ -1,6 +1,7 @@
 import { cloneDeep } from 'lodash';
 
 import { musicDB } from '@/hooks/MusicHook';
+import { playbackRequestManager } from '@/services/playbackRequestManager';
 import { SongSourceConfigManager } from '@/services/SongSourceConfigManager';
 import { useSettingsStore } from '@/store';
 import type { SongResult } from '@/types/music';
@@ -165,10 +166,10 @@ export class CacheManager {
   /**
    * 清除指定歌曲的失败缓存
    */
-  static clearFailedCache(id: number): void {
+  static clearFailedCache(id: number, strategyName?: string): void {
     const keysToDelete: string[] = [];
     failedCacheMap.forEach((_, key) => {
-      if (key.startsWith(`${id}_`)) {
+      if (strategyName ? key === `${id}_${strategyName}` : key.startsWith(`${id}_`)) {
         keysToDelete.push(key);
       }
     });
@@ -182,13 +183,15 @@ export class CacheManager {
    * 清除指定歌曲的所有缓存
    */
   static async clearMusicCache(id: number): Promise<void> {
+    // Clear the current in-memory cache even if IndexedDB is unavailable.
+    this.clearFailedCache(id);
     try {
       // 清除URL缓存
       await deleteData('music_url_cache', id);
       console.log(`清除歌曲 ${id} 的URL缓存`);
 
       // 清除失败缓存 - 需要遍历所有策略
-      const strategies = ['custom', 'gdmusic', 'unblockMusic'];
+      const strategies = ['custom', 'gdmusic', 'unblockMusic', 'lxMusic'];
       for (const strategy of strategies) {
         const cacheKey = `${id}_${strategy}`;
         try {
@@ -557,12 +560,27 @@ export class MusicParser {
       : undefined;
     const requestFallback = async (reason: string) => {
       const startedAt = performance.now();
+      if (!requestMusic.configured) {
+        trace?.('source.parser-fallback', {
+          reason: 'unconfigured',
+          outcome: 'skipped',
+          hasUrl: false,
+          elapsedMs: 0,
+          appCode: 404
+        });
+        return {
+          data: { code: 404, message: '备用服务未配置', data: undefined }
+        };
+      }
       try {
-        const result = await requestMusic.get<any>('/music', { params: { id } });
+        const response = await requestMusic.getMusic<MusicParseResult['data']>(id);
+        const result: MusicParseResult = response ?? {
+          data: { code: 404, message: '备用服务未配置', data: undefined }
+        };
         trace?.('source.parser-fallback', {
           reason,
           elapsedMs: Math.round(performance.now() - startedAt),
-          httpStatus: typeof result?.status === 'number' ? result.status : undefined,
+          httpStatus: response?.status,
           ...parseResultFields(result)
         });
         return result;
@@ -648,6 +666,14 @@ export class MusicParser {
 
       // 按优先级依次尝试解析策略
       for (const strategy of availableStrategies) {
+        if (requestId && !playbackRequestManager.isRequestValid(requestId)) {
+          throw new Error('Request cancelled');
+        }
+        // Foreground playback must not inherit a failed background preload's cooldown.
+        // Do this immediately before parse(), whose cache check runs synchronously.
+        if (requestId && playbackRequestManager.getRequest(requestId)?.retrySourceFailures) {
+          CacheManager.clearFailedCache(id, strategy.name);
+        }
         const startedAt = performance.now();
         const failedAt = trace ? failedCacheMap.get(`${id}_${strategy.name}`) : undefined;
         const retryAfterMs = failedAt
@@ -693,6 +719,7 @@ export class MusicParser {
 
       console.warn('所有解析策略都失败了，使用后备方案');
     } catch (error) {
+      if (error instanceof Error && error.message === 'Request cancelled') throw error;
       fallbackReason = 'parser-error';
       trace?.('source.parser-error', { stage: 'parse', ...playbackErrorFields(error) });
       console.error('MusicParser.parseMusic 执行异常，使用后备方案:', error);

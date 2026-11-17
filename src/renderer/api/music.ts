@@ -2,11 +2,17 @@ import { musicDB } from '@/hooks/MusicHook';
 import { useSettingsStore, useUserStore } from '@/store';
 import type { ILyric } from '@/types/lyric';
 import type { SongResult } from '@/types/music';
+import {
+  isLyricResponse,
+  isTransientLyricStatus,
+  LyricLoadError,
+  type LyricRequestOptions
+} from '@/utils/lyricState';
 import request from '@/utils/request';
 
 import { MusicParser, type MusicParseResult } from './musicParser';
 
-const { addData, getData, deleteData } = musicDB;
+const { saveData, getData } = musicDB;
 
 // 将 FM 歌曲移至垃圾桶（不喜欢）
 export const fmTrash = (id: number) => {
@@ -21,7 +27,7 @@ export const getMusicQualityDetail = (id: number) => {
 };
 
 // 根据音乐Id获取音乐播放URl
-export const getMusicUrl = async (id: number, isDownloaded: boolean = false) => {
+export const getMusicUrl = async (id: number, isDownloaded = false, signal?: AbortSignal) => {
   const userStore = useUserStore();
   const settingStore = useSettingsStore();
   // 判断是否登录
@@ -29,6 +35,7 @@ export const getMusicUrl = async (id: number, isDownloaded: boolean = false) => 
     if (userStore.user && isDownloaded && userStore.user.vipType !== 0) {
       const url = '/song/download/url/v1';
       const res = await request.get(url, {
+        signal,
         params: {
           id,
           level: settingStore.setData.musicQuality || 'higher',
@@ -42,16 +49,21 @@ export const getMusicUrl = async (id: number, isDownloaded: boolean = false) => 
       }
     }
   } catch (error) {
+    signal?.throwIfAborted();
     console.error('error', error);
   }
 
-  return await request.get('/song/url/v1', {
+  const config = {
+    signal,
+    noRetry: true,
     params: {
       id,
+      crypto: 'weapi',
       level: settingStore.setData.musicQuality || 'higher',
       encodeType: settingStore.setData.musicQuality == 'lossless' ? 'aac' : 'flac'
     }
-  });
+  };
+  return await request.get('/song/url/v1', config);
 };
 
 // 获取歌曲详情
@@ -60,25 +72,38 @@ export const getMusicDetail = (ids: Array<number>) => {
 };
 
 // 根据音乐Id获取音乐歌词
-export const getMusicLrc = async (id: number) => {
+export const getMusicLrc = async (id: number, options: LyricRequestOptions = {}) => {
   const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000; // 10天的毫秒数
 
   try {
     // 尝试获取缓存的歌词
-    const cachedLyric = await getData('music_lyric', id);
-    if (cachedLyric?.createTime && Date.now() - cachedLyric.createTime < TEN_DAYS_MS) {
+    options.signal?.throwIfAborted();
+    const cachedLyric = options.forceRefresh ? undefined : await getData('music_lyric', id);
+    if (
+      cachedLyric?.createTime &&
+      Date.now() - cachedLyric.createTime < TEN_DAYS_MS &&
+      isLyricResponse(cachedLyric.data)
+    ) {
       return { ...cachedLyric };
     }
 
     // 获取新的歌词数据
-    const res = await request.get<ILyric>('/lyric/new', { params: { id } });
+    const config = {
+      params: { id, noLogin: true },
+      signal: options.signal,
+      timeout: 10000,
+      noRetry: true
+    };
+    const res = await request.get<ILyric>('/lyric/new', config);
+    options.signal?.throwIfAborted();
+    if (!isLyricResponse(res?.data))
+      throw new LyricLoadError('response', isTransientLyricStatus(res?.data?.code));
 
-    // 只有在成功获取新数据后才删除旧缓存并添加新缓存
+    // 只有确认响应有效才更新缓存，缓存写入失败不影响已取到的歌词。
     if (res?.data) {
-      if (cachedLyric) {
-        await deleteData('music_lyric', id);
-      }
-      addData('music_lyric', { id, data: res.data, createTime: Date.now() });
+      void saveData('music_lyric', { id, data: res.data, createTime: Date.now() }).catch((error) =>
+        console.warn('保存歌词缓存失败:', error)
+      );
     }
 
     return res;

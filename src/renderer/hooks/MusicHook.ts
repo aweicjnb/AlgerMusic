@@ -1,14 +1,23 @@
 import { cloneDeep } from 'lodash';
 import { createDiscreteApi } from 'naive-ui';
-import { computed, type ComputedRef, nextTick, onUnmounted, ref, watch } from 'vue';
+import { computed, type ComputedRef, onUnmounted, ref, watch } from 'vue';
 
 import useIndexedDB from '@/hooks/IndexDBHook';
 import { type AudioRecoveryTrigger, audioService } from '@/services/audioService';
 import { playbackRequestManager } from '@/services/playbackRequestManager';
 import type { usePlayerStore } from '@/store';
-import type { Artist, ILyricText, SongResult } from '@/types/music';
+import type { Artist, ILyric, ILyricText, SongResult } from '@/types/music';
 import { isElectron } from '@/utils';
 import { getTextColors } from '@/utils/linearColor';
+import {
+  emptyLyric,
+  failedLyric,
+  getLyricStatus,
+  getOnlineLyricId,
+  isRetryableLyricError,
+  lyricFailureReason,
+  type LyricStatus
+} from '@/utils/lyricState';
 import { logPlayback, logTrack, playbackErrorFields } from '@/utils/playbackLog';
 import { parseLyrics } from '@/utils/yrcParser';
 
@@ -55,6 +64,208 @@ export const textColors = ref<any>(getTextColors());
 export let playMusic: ComputedRef<SongResult>;
 export let artistList: ComputedRef<Artist[]>;
 
+let lyricTaskVersion = 0;
+let lyricAbortController: AbortController | undefined;
+const lyricRetryDelays = [1000, 3000];
+export const lyricAutoRetryLimit = lyricRetryDelays.length;
+const pendingLyricRequest = ref<{
+  version: number;
+  id: string | number;
+  source?: string;
+  playbackRequestId: string | null;
+  retryAttempt: number;
+} | null>(null);
+
+export const lyricLoadStatus = computed<LyricStatus>(() => {
+  const song = playMusic?.value;
+  if (!song?.id) return 'idle';
+  const pending = pendingLyricRequest.value;
+  if (
+    pending &&
+    pending.id === song.id &&
+    pending.source === song.source &&
+    pending.playbackRequestId === playbackRequestManager.getCurrentRequestId()
+  )
+    return 'loading';
+  if (typeof song.lyric === 'string') return 'loading';
+  return getLyricStatus(song.lyric);
+});
+
+export const lyricRetryAttempt = computed(() =>
+  lyricLoadStatus.value === 'loading' ? (pendingLyricRequest.value?.retryAttempt ?? 0) : 0
+);
+
+export const canRetryLyrics = computed(
+  () =>
+    getOnlineLyricId(playMusic?.value?.id) !== null &&
+    (lyricLoadStatus.value === 'failed' || lyricLoadStatus.value === 'empty')
+);
+
+const waitForLyricRetry = (delayMs: number, signal: AbortSignal): Promise<boolean> =>
+  new Promise((resolve) => {
+    const finish = (completed: boolean) => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', cancel);
+      resolve(completed);
+    };
+    const cancel = () => finish(false);
+    const timer = setTimeout(() => finish(true), delayMs);
+    signal.addEventListener('abort', cancel, { once: true });
+    if (signal.aborted) cancel();
+  });
+
+// Each attempt has its own deadline; task cancellation also releases a pending cache read/import.
+const requestLyricAttempt = async (
+  id: string | number,
+  forceRefresh: boolean,
+  signal: AbortSignal
+): Promise<ILyric> => {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let cancel: () => void = () => {};
+  try {
+    return await Promise.race([
+      (async () => {
+        const { loadLrc } = await import('@/hooks/usePlayerHooks');
+        return loadLrc(id, { forceRefresh, signal: controller.signal });
+      })(),
+      new Promise<ILyric>((resolve) => {
+        cancel = () => {
+          resolve(failedLyric('network', false));
+          controller.abort();
+        };
+        signal.addEventListener('abort', cancel, { once: true });
+        timeout = setTimeout(() => {
+          resolve(failedLyric('timeout'));
+          controller.abort();
+        }, 15000);
+        if (signal.aborted) cancel();
+      })
+    ]);
+  } catch (error) {
+    return failedLyric(lyricFailureReason(error), isRetryableLyricError(error));
+  } finally {
+    clearTimeout(timeout);
+    signal.removeEventListener('abort', cancel);
+  }
+};
+
+// Runs independently from audio loading. A newer song or lyric request invalidates the old result.
+export const loadCurrentLyrics = async (forceRefresh = false): Promise<boolean> => {
+  const store = getPlayerStore();
+  const song = store.playMusic;
+  const version = ++lyricTaskVersion;
+  lyricAbortController?.abort();
+  lyricAbortController = undefined;
+  pendingLyricRequest.value = null;
+  if (!song?.id) return false;
+  if (
+    !forceRefresh &&
+    (getLyricStatus(song.lyric) === 'ready' || song.lyric?.loadState === 'empty')
+  )
+    return true;
+
+  const request = {
+    version,
+    id: song.id,
+    source: song.source,
+    playbackRequestId: playbackRequestManager.getCurrentRequestId(),
+    retryAttempt: 0
+  };
+  pendingLyricRequest.value = request;
+  const controller = new AbortController();
+  lyricAbortController = controller;
+  const isCurrent = () =>
+    !controller.signal.aborted &&
+    version === lyricTaskVersion &&
+    store.playMusic.id === request.id &&
+    store.playMusic.source === request.source &&
+    playbackRequestManager.getCurrentRequestId() === request.playbackRequestId;
+  const track = logTrack(song);
+  logPlayback(forceRefresh ? 'lyric.retry-start' : 'lyric.request-start', {
+    track,
+    requestId: request.playbackRequestId,
+    lyricRequest: version,
+    forceRefresh
+  });
+  try {
+    for (let attempt = 0; attempt <= lyricRetryDelays.length; attempt++) {
+      if (!isCurrent()) return false;
+      const result = await requestLyricAttempt(
+        request.id,
+        forceRefresh || attempt > 0,
+        controller.signal
+      );
+      if (!isCurrent()) {
+        logPlayback('lyric.superseded', { track, lyricRequest: version, stage: 'load' });
+        return false;
+      }
+      logPlayback('lyric.request-result', {
+        track,
+        lyricRequest: version,
+        attempt: attempt + 1,
+        state: result.loadState,
+        reason: result.failureReason,
+        retryable: result.retryable,
+        lineCount: result.lrcArray.length
+      });
+      if (
+        result.loadState !== 'failed' ||
+        !result.retryable ||
+        attempt === lyricRetryDelays.length
+      ) {
+        store.playMusic.lyric = result;
+        if (result.loadState === 'failed' && result.retryable) {
+          logPlayback('lyric.retry-exhausted', {
+            track,
+            lyricRequest: version,
+            attempts: attempt + 1
+          });
+        }
+        return result.loadState !== 'failed';
+      }
+
+      const delayMs = lyricRetryDelays[attempt];
+      pendingLyricRequest.value = { ...request, retryAttempt: attempt + 1 };
+      logPlayback('lyric.auto-retry-scheduled', {
+        track,
+        lyricRequest: version,
+        retryAttempt: attempt + 1,
+        delayMs,
+        reason: result.failureReason
+      });
+      if (!(await waitForLyricRetry(delayMs, controller.signal)) || !isCurrent()) {
+        logPlayback('lyric.superseded', { track, lyricRequest: version, stage: 'retry-wait' });
+        return false;
+      }
+      logPlayback('lyric.auto-retry-start', {
+        track,
+        lyricRequest: version,
+        retryAttempt: attempt + 1
+      });
+    }
+    return false;
+  } catch (error) {
+    if (isCurrent()) store.playMusic.lyric = failedLyric(lyricFailureReason(error));
+    logPlayback('lyric.request-failed', {
+      track,
+      lyricRequest: version,
+      ...playbackErrorFields(error)
+    });
+    return false;
+  } finally {
+    if (version === lyricTaskVersion) {
+      pendingLyricRequest.value = null;
+      lyricAbortController = undefined;
+    }
+  }
+};
+
+export const retryCurrentLyrics = (): Promise<boolean> => {
+  if (!canRetryLyrics.value) return Promise.resolve(false);
+  return loadCurrentLyrics(true);
+};
+
 export const musicDB = await useIndexedDB(
   'musicDB',
   [
@@ -97,11 +308,9 @@ let audioListenersInitialized = false;
  * @param lyricsStr 歌词字符串
  * @returns 解析后的歌词数据
  */
-const parseLyricsString = async (
-  lyricsStr: string
-): Promise<{ lrcArray: ILyricText[]; lrcTimeArray: number[]; hasWordByWord: boolean }> => {
+const parseLyricsString = async (lyricsStr: string): Promise<ILyric> => {
   if (!lyricsStr || typeof lyricsStr !== 'string') {
-    return { lrcArray: [], lrcTimeArray: [], hasWordByWord: false };
+    return emptyLyric();
   }
 
   try {
@@ -110,7 +319,7 @@ const parseLyricsString = async (
 
     if (!parseResult.success) {
       console.error('歌词解析失败:', parseResult.error.message);
-      return { lrcArray: [], lrcTimeArray: [], hasWordByWord: false };
+      return failedLyric('parse');
     }
 
     const { lyrics } = parseResult.data;
@@ -138,12 +347,14 @@ const parseLyricsString = async (
         duration: line.duration
       });
 
-      lrcTimeArray.push(line.startTime);
+      lrcTimeArray.push(line.startTime / 1000);
     }
-    return { lrcArray, lrcTimeArray, hasWordByWord };
+    return lrcArray.some((line) => line.text.trim())
+      ? { lrcArray, lrcTimeArray, hasWordByWord, loadState: 'ready' }
+      : failedLyric('parse');
   } catch (error) {
     console.error('解析歌词时发生错误:', error);
-    return { lrcArray: [], lrcTimeArray: [], hasWordByWord: false };
+    return failedLyric('parse');
   }
 };
 
@@ -151,70 +362,73 @@ const parseLyricsString = async (
 const setupMusicWatchers = () => {
   const store = getPlayerStore();
 
-  // 监听 playerStore.playMusic 的变化以更新歌词数据
+  // 歌曲先选中、歌词后返回；同一 ID 的歌词替换也必须同步。
   watch(
-    () => store.playMusic.id,
-    async (newId, oldId) => {
-      // 如果没有歌曲ID，清空歌词
-      if (!newId) {
+    [() => store.playMusic.source, () => store.playMusic.id, () => store.playMusic.lyric],
+    async ([source, newId, lyricData], [oldSource, oldId], onCleanup) => {
+      let cancelled = false;
+      onCleanup(() => {
+        cancelled = true;
+      });
+      const isCurrent = () =>
+        !cancelled &&
+        store.playMusic.id === newId &&
+        store.playMusic.source === source &&
+        store.playMusic.lyric === lyricData;
+      const track = logTrack(store.playMusic);
+
+      if (newId !== oldId || source !== oldSource || !lyricData) {
         lrcArray.value = [];
         lrcTimeArray.value = [];
         nowIndex.value = 0;
+      }
+      if (!newId) return;
+      if (!lyricData) {
+        logPlayback('lyric.awaiting-metadata', { track });
         return;
       }
 
-      // 避免相同ID的重复执行(但允许初始化时执行)
-      if (newId === oldId && lrcArray.value.length > 0) return;
-
-      // 歌曲切换时重置歌词索引
-      if (newId !== oldId) {
-        nowIndex.value = 0;
+      if (typeof lyricData === 'string') {
+        const parsed = await parseLyricsString(lyricData);
+        if (!isCurrent()) {
+          logPlayback('lyric.superseded', { track, stage: 'parse' });
+          return;
+        }
+        // Normalize legacy strings so loading/parse failures have the same state as API lyrics.
+        store.playMusic.lyric = parsed;
+        return;
+      } else {
+        const rawLrc = lyricData.lrcArray || [];
+        // 原文先显示，翻译异步完成后仅更新当前歌曲。
+        lrcArray.value = rawLrc;
+        lrcTimeArray.value = lyricData.lrcTimeArray || [];
+        try {
+          const { translateLyrics } = await import('@/services/lyricTranslation');
+          const translated = await translateLyrics(rawLrc);
+          if (!isCurrent()) {
+            logPlayback('lyric.superseded', { track, stage: 'translation' });
+            return;
+          }
+          lrcArray.value = translated;
+        } catch (error) {
+          if (!isCurrent()) return;
+          logPlayback('lyric.translation-failed', { track, ...playbackErrorFields(error) });
+        }
       }
 
-      await nextTick(async () => {
-        console.log('歌曲切换，更新歌词数据');
-
-        // 检查是否有原始歌词字符串需要解析
-        const lyricData = playMusic.value.lyric;
-        if (lyricData && typeof lyricData === 'string') {
-          // 如果歌词是字符串格式，使用新的解析器
-          const {
-            lrcArray: parsedLrcArray,
-            lrcTimeArray: parsedTimeArray,
-            hasWordByWord
-          } = await parseLyricsString(lyricData);
-          lrcArray.value = parsedLrcArray;
-          lrcTimeArray.value = parsedTimeArray;
-
-          // 更新歌曲的歌词数据结构
-          if (playMusic.value.lyric && typeof playMusic.value.lyric === 'object') {
-            playMusic.value.lyric.hasWordByWord = hasWordByWord;
-          }
-        } else {
-          // 使用现有的歌词数据结构
-          const rawLrc = lyricData?.lrcArray || [];
-          lrcTimeArray.value = lyricData?.lrcTimeArray || [];
-
-          try {
-            const { translateLyrics } = await import('@/services/lyricTranslation');
-            lrcArray.value = await translateLyrics(rawLrc as any);
-          } catch (e) {
-            console.error('翻译歌词失败，使用原始歌词：', e);
-            lrcArray.value = rawLrc as any;
-          }
-        }
-        // 当歌词数据更新时，如果歌词窗口打开，则发送数据
-        if (isElectron && isLyricWindowOpen.value) {
-          console.log('歌词窗口已打开，同步最新歌词数据');
-          // 不管歌词数组是否为空，都发送最新数据
-          sendLyricToWin();
-
-          // 再次延迟发送，确保歌词窗口已完全加载
-          setTimeout(() => {
-            sendLyricToWin();
-          }, 500);
-        }
+      logPlayback('lyric.display-ready', {
+        track,
+        lineCount: lrcArray.value.length,
+        timedLineCount: lrcTimeArray.value.filter((time) => Number.isFinite(time) && time >= 0)
+          .length,
+        wordByWord: lrcArray.value.some((line) => line.hasWordByWord)
       });
+      if (isElectron && isLyricWindowOpen.value) {
+        sendLyricToWin();
+        setTimeout(() => {
+          if (isCurrent()) sendLyricToWin();
+        }, 500);
+      }
     },
     { immediate: true }
   );

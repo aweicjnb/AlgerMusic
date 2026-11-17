@@ -1,6 +1,6 @@
 <template>
   <div
-    class="flex items-center gap-3 px-2 py-2 mb-2 rounded-xl cursor-pointer transition-colors duration-200 bg-light-100 dark:bg-dark-100 hover:bg-light-200 dark:hover:bg-dark-200"
+    class="history-item flex items-center gap-3 px-2 py-2 mb-2 rounded-xl cursor-pointer transition-colors duration-200"
     @click="$emit('click')"
   >
     <n-image
@@ -46,3 +46,9 @@ defineEmits<{
   delete: [];
 }>();
 </script>
+
+<style scoped>
+.history-item:hover {
+  background-color: var(--app-surface-hover);
+}
+</style>

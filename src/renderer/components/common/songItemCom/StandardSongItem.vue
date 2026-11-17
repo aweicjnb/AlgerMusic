@@ -155,7 +155,7 @@ const onPlayNext = () => {
 <style lang="scss" scoped>
 .standard-song-item {
   &:hover {
-    @apply bg-light-100 dark:bg-dark-100;
+    background-color: var(--app-surface-hover);
   }
 
   .song-item-img {
@@ -175,7 +175,8 @@ const onPlayNext = () => {
   }
 
   .song-item-operating {
-    @apply flex items-center rounded-full ml-4 border dark:border-gray-700 border-gray-200 bg-light dark:bg-black;
+    @apply flex items-center rounded-full ml-4 border border-transparent;
+    background-color: var(--app-surface-muted);
 
     .iconfont {
       @apply text-xl;

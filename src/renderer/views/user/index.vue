@@ -1,9 +1,7 @@
 <template>
   <div class="user-page">
     <template v-if="infoLoading">
-      <div
-        class="left-skeleton flex-1 max-w-[600px] rounded-2xl overflow-hidden p-4 bg-light-200 dark:bg-dark-100"
-      >
+      <div class="left-skeleton user-panel">
         <div class="flex flex-col gap-6">
           <div class="flex justify-between">
             <div class="h-8 w-32 skeleton-shimmer rounded-lg" />
@@ -19,7 +17,7 @@
             </div>
           </div>
           <div class="h-4 w-3/4 skeleton-shimmer rounded-lg" />
-          <div class="mt-4 rounded-xl bg-light p-4 dark:bg-black">
+          <div class="mt-4 border-t border-neutral-200/60 pt-4 dark:border-white/10">
             <div class="mb-4 h-8 w-full skeleton-shimmer rounded-xl" />
             <div class="space-y-4">
               <div v-for="i in 5" :key="i" class="flex gap-3">
@@ -33,15 +31,11 @@
           </div>
         </div>
       </div>
-      <div v-if="!isMobile" class="right">
+      <div v-if="!isMobile" class="right user-panel">
         <div class="title"><div class="h-8 w-32 skeleton-shimmer rounded-lg" /></div>
-        <div class="rounded-2xl bg-light p-4 dark:bg-black">
+        <div>
           <div class="space-y-2">
-            <div
-              v-for="i in 10"
-              :key="i"
-              class="flex items-center gap-4 rounded-2xl bg-light-100 p-2 dark:bg-dark-100"
-            >
+            <div v-for="i in 10" :key="i" class="flex items-center gap-4 p-2">
               <div class="h-10 w-10 skeleton-shimmer rounded-full flex-shrink-0" />
               <div class="h-10 w-10 skeleton-shimmer rounded-xl flex-shrink-0" />
               <div class="flex flex-1 flex-col gap-2">
@@ -56,9 +50,8 @@
     <template v-else>
       <div
         v-if="userDetail && user"
-        class="left"
+        class="left user-panel"
         :class="setAnimationClass('animate__fadeIn')"
-        :style="{ backgroundImage: `url(${getImgUrl(user.backgroundUrl)})` }"
       >
         <div class="page">
           <div class="user-name">
@@ -142,7 +135,7 @@
           </div>
         </div>
       </div>
-      <div v-if="!isMobile" class="right" :class="setAnimationClass('animate__fadeIn')">
+      <div v-if="!isMobile" class="right user-panel" :class="setAnimationClass('animate__fadeIn')">
         <div class="title">{{ t('user.ranking.title') }}</div>
         <div class="record-list">
           <n-scrollbar>
@@ -150,7 +143,10 @@
               v-for="(item, index) in recordList"
               :key="item.id"
               class="record-item"
-              :class="setAnimationClass('animate__bounceInUp')"
+              :class="[
+                setAnimationClass('animate__bounceInUp'),
+                { 'is-playing': playerStore.playMusic.id === item.id }
+              ]"
               :style="setAnimationDelay(index, 25)"
             >
               <div class="play-score">
@@ -465,38 +461,53 @@ const currentLoginType = computed(() => userStore.loginType);
 
 <style lang="scss" scoped>
 .user-page {
-  @apply flex h-full;
+  --profile-surface: #fff;
+  --profile-border: rgb(0 0 0 / 0.07);
+  --profile-hover: rgb(0 0 0 / 0.035);
+  @apply flex gap-5 h-full min-h-0;
+  padding: 16px 24px 24px;
+
+  .user-panel {
+    background: var(--profile-surface);
+    border: 1px solid var(--profile-border);
+    border-radius: 24px;
+    @apply min-w-0 min-h-0 overflow-hidden;
+  }
+  .left-skeleton {
+    flex: 0 0 42%;
+    max-width: 520px;
+    padding: 20px;
+  }
   .left {
-    max-width: 600px;
-    @apply flex-1 rounded-2xl overflow-hidden relative bg-no-repeat h-full;
-    @apply bg-gray-900 dark:bg-gray-800;
+    flex: 0 0 42%;
+    max-width: 520px;
+    @apply relative h-full;
 
     .page {
-      @apply p-4 w-full z-10 flex flex-col h-full;
-      @apply bg-black bg-opacity-40;
+      @apply p-5 w-full z-10 flex flex-col h-full min-h-0;
     }
     .title {
       @apply text-lg font-bold flex items-center justify-between;
       @apply text-gray-900 dark:text-white;
     }
     .user-name {
-      @apply text-xl font-bold mb-4 flex justify-between;
-      @apply text-white text-opacity-70;
+      @apply text-xl font-bold mb-5 flex justify-between items-center gap-4;
+      @apply text-neutral-900 dark:text-neutral-100;
     }
 
     .uesr-signature {
       @apply mt-4;
-      @apply text-white text-opacity-70;
+      @apply text-neutral-500 dark:text-neutral-400;
     }
 
     .user-info {
       @apply flex items-center;
       &-list {
-        @apply flex justify-around w-2/5 text-center;
-        @apply text-white text-opacity-70;
+        @apply flex flex-1 max-w-[300px] justify-around ml-5 text-center;
+        @apply text-neutral-500 dark:text-neutral-400;
 
         .label {
-          @apply text-xl font-bold text-white;
+          @apply text-xl font-bold text-neutral-900 dark:text-neutral-100;
         }
       }
 
@@ -507,36 +518,43 @@ const currentLoginType = computed(() => userStore.loginType);
   }
 
   .right {
-    @apply flex-1 ml-4 overflow-hidden h-full;
+    @apply flex-1 overflow-hidden h-full p-5 flex flex-col;
 
     .record-list {
-      @apply rounded-2xl;
-      @apply bg-light dark:bg-black;
-      height: calc(100% - 60px);
+      @apply flex-1 min-h-0;
 
       .record-item {
-        @apply flex items-center px-2 mb-2 rounded-2xl bg-light-100 dark:bg-dark-100;
+        @apply flex items-center px-1 mb-1 rounded-xl transition-colors duration-150;
+        &:hover {
+          background: var(--profile-hover);
+        }
+        &.is-playing {
+          @apply bg-green-500/10;
+        }
       }
 
       .song-item {
-        @apply flex-1;
+        @apply flex-1 min-w-0;
       }
 
       .play-score {
-        @apply text-gray-500 dark:text-gray-400 mr-2 text-lg w-10 h-10 rounded-full flex items-center justify-center;
+        @apply text-neutral-400 dark:text-neutral-500 mr-1 text-sm w-8 h-10 flex-shrink-0 flex items-center justify-center;
       }
     }
 
     .title {
-      @apply text-xl font-bold m-4;
+      @apply text-xl font-bold mb-5;
       @apply text-gray-900 dark:text-white;
     }
   }
 }
 
 .play-list {
-  @apply mt-4 py-4 px-2 rounded-xl flex-1 overflow-hidden;
-  @apply bg-light dark:bg-black;
+  @apply mt-5 pt-4 border-t border-neutral-200/60 dark:border-white/10 flex-1 overflow-hidden min-h-0 flex flex-col;
+
+  :deep(.n-scrollbar) {
+    @apply flex-1 min-h-0;
+  }
 
   &-title {
     @apply text-lg;
@@ -556,7 +574,7 @@ const currentLoginType = computed(() => userStore.loginType);
     }
 
     &-info {
-      @apply ml-2 flex-1;
+      @apply ml-3 flex-1 min-w-0;
     }
 
     &-name {
@@ -585,10 +603,47 @@ const currentLoginType = computed(() => userStore.loginType);
   @apply text-sm text-green-500 dark:text-green-400;
 }
 
+.dark .user-page {
+  --profile-surface: #18191d;
+  --profile-border: rgb(255 255 255 / 0.08);
+  --profile-hover: rgb(255 255 255 / 0.05);
+}
+.user-page .record-list :deep(.mini-song-item),
+.user-page .record-list :deep(.mini-song-item:hover) {
+  background: transparent;
+}
+.record-list :deep(.song-item-content) {
+  min-width: 0;
+}
+.user-page .record-list :deep(.mini-song-item .song-item-operating) {
+  background: transparent;
+  border-color: transparent;
+}
+
+@media (max-width: 1023px) {
+  .user-page {
+    gap: 16px;
+    padding: 12px 16px 20px;
+  }
+  .user-page .left,
+  .user-page .left-skeleton {
+    flex-basis: 44%;
+  }
+  .user-page .user-panel > .page,
+  .user-page .right {
+    padding: 16px;
+  }
+}
+
 .mobile {
   .user-page {
     padding-left: var(--page-pl);
     padding-right: var(--page-pr);
+  }
+  .user-page .left,
+  .user-page .left-skeleton {
+    flex: 1;
+    max-width: none;
   }
 
   .login-container {

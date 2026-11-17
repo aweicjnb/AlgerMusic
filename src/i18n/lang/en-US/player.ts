@@ -34,6 +34,11 @@ export default {
     list: 'Next'
   },
   lrc: {
+    loading: 'Loading lyrics…',
+    autoRetrying: 'Retrying lyrics automatically ({attempt}/{total})…',
+    loadFailed: 'Could not load lyrics',
+    retry: 'Retry lyrics',
+    refresh: 'Fetch again',
     noLrc: 'No lyrics, please enjoy',
     noAutoScroll: 'This lyrics does not support auto-scroll'
   },

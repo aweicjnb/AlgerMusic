@@ -32,7 +32,7 @@
     :unstable-show-mask="false"
     :z-index="9999999"
   >
-    <div class="eq-modal-content">
+    <div class="eq-modal-content app-popup">
       <div class="modal-close" @click="showEQModal = false">
         <i class="ri-close-line"></i>
       </div>
@@ -47,7 +47,7 @@
     :unstable-show-mask="false"
     :z-index="9999999"
   >
-    <div class="timer-modal-content">
+    <div class="timer-modal-content app-popup">
       <div class="modal-close" @click="playerStore.showSleepTimer = false">
         <i class="ri-close-line"></i>
       </div>
@@ -62,7 +62,7 @@
     :unstable-show-mask="false"
     :z-index="9999999"
   >
-    <div class="speed-modal-content">
+    <div class="speed-modal-content app-popup">
       <div class="modal-close" @click="showSpeedModal = false">
         <i class="ri-close-line"></i>
       </div>
@@ -274,7 +274,7 @@ const selectSpeed = (speed: number) => {
 .eq-modal-content,
 .timer-modal-content,
 .speed-modal-content {
-  @apply p-6 rounded-3xl bg-light-100 dark:bg-dark-100 bg-opacity-80 filter backdrop-blur-sm;
+  @apply p-6 rounded-3xl;
   max-width: 600px;
   margin: 0 auto;
 }
@@ -299,8 +299,10 @@ const selectSpeed = (speed: number) => {
   }
   .speed-option {
     @apply py-2 px-4 rounded-full cursor-pointer transition-all;
-    @apply bg-gray-100 dark:bg-gray-800;
-    @apply hover:bg-green-100 dark:hover:bg-green-900;
+    background-color: var(--app-surface-muted);
+    &:hover {
+      background-color: var(--app-surface-hover);
+    }
   }
   .speed-option.active {
     @apply bg-green-500 text-white;

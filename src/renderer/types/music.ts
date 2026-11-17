@@ -1,14 +1,6 @@
 // 音乐平台类型
 export type Platform =
-  | 'qq'
-  | 'migu'
-  | 'kugou'
-  | 'kuwo'
-  | 'pyncmd'
-  | 'joox'
-  | 'gdmusic'
-  | 'lxMusic'
-  | 'custom';
+  'qq' | 'migu' | 'kugou' | 'kuwo' | 'pyncmd' | 'joox' | 'gdmusic' | 'lxMusic' | 'custom';
 
 // 默认平台列表
 export const DEFAULT_PLATFORMS: Platform[] = ['lxMusic', 'migu', 'kugou', 'kuwo', 'pyncmd'];
@@ -40,6 +32,9 @@ export interface ILyric {
   lrcArray: ILyricText[];
   // 新增字段标识是否包含逐字歌词
   hasWordByWord?: boolean;
+  loadState?: 'ready' | 'empty' | 'failed';
+  failureReason?: 'network' | 'timeout' | 'response' | 'parse';
+  retryable?: boolean;
 }
 
 export interface SongResult {

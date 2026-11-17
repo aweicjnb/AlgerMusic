@@ -31,9 +31,7 @@
       <div class="w-full max-w-5xl mx-auto p-6 pb-24">
         <!-- 自定义 Tab 切换 -->
         <div class="flex justify-center mb-8">
-          <div
-            class="bg-white dark:bg-white/5 p-1.5 rounded-2xl shadow-sm border border-gray-100 dark:border-white/10 flex gap-1 relative"
-          >
+          <div class="app-panel p-1.5 rounded-2xl shadow-sm flex gap-1 relative">
             <div
               v-for="tab in tabs"
               :key="tab.id"
@@ -62,7 +60,7 @@
           <!-- 左侧：输入区域 -->
           <div class="lg:col-span-2 space-y-6">
             <div
-              class="bg-white dark:bg-neutral-900 rounded-3xl border border-gray-100 dark:border-gray-800 shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none overflow-hidden p-1 transition-all duration-300"
+              class="app-panel rounded-3xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] dark:shadow-none overflow-hidden p-1 transition-all duration-300"
             >
               <!-- 链接导入内容 -->
               <div v-if="currentTab === 'link'" class="p-6 space-y-6 animate-fade-in">

@@ -7,10 +7,11 @@ import { computed, ref, shallowRef, triggerRef } from 'vue';
 import i18n from '@/../i18n/renderer';
 import { useSongDetail } from '@/hooks/usePlayerHooks';
 import { isCurrentPlaybackAttempt } from '@/services/playbackDecision';
+import { playbackRequestManager } from '@/services/playbackRequestManager';
 import { preloadService } from '@/services/preloadService';
 import type { SongResult } from '@/types/music';
 import { getImgUrl } from '@/utils';
-import { logPlayback, logTrack } from '@/utils/playbackLog';
+import { audioSourceKind, logPlayback, logTrack, playbackErrorFields } from '@/utils/playbackLog';
 import { performShuffle, preloadCoverImage } from '@/utils/playerUtils';
 
 import { useIntelligenceModeStore } from './intelligenceMode';
@@ -90,6 +91,7 @@ export const usePlaylistStore = defineStore(
     const consecutiveFailCount = ref(0);
     const MAX_CONSECUTIVE_FAILS = 5; // 最大连续失败次数
     const SINGLE_TRACK_MAX_RETRIES = 3; // 单曲最大重试次数
+    let navigationVersion = 0;
 
     // ==================== Computed ====================
     const currentPlayList = computed(() => playList.value);
@@ -102,6 +104,7 @@ export const usePlaylistStore = defineStore(
      */
     const fetchSongs = async (startIndex: number, endIndex: number) => {
       try {
+        const originalList = playList.value;
         const songs = playList.value.slice(
           Math.max(0, startIndex),
           Math.min(endIndex, playList.value.length)
@@ -121,6 +124,7 @@ export const usePlaylistStore = defineStore(
             }
           })
         );
+        if (playList.value !== originalList) return;
 
         const nextSong = detailedSongs[0];
         if (nextSong && !(nextSong.lyric && nextSong.lyric.lrcTimeArray.length > 0)) {
@@ -134,7 +138,8 @@ export const usePlaylistStore = defineStore(
         }
 
         detailedSongs.forEach((song, index) => {
-          if (song && startIndex + index < playList.value.length) {
+          const target = playList.value[startIndex + index];
+          if (song && target?.id === songs[index]?.id && target?.source === songs[index]?.source) {
             playList.value[startIndex + index] = song;
           }
         });
@@ -144,7 +149,25 @@ export const usePlaylistStore = defineStore(
         // 预加载下一首歌曲的音频和封面
         if (nextSong) {
           if (nextSong.playMusicUrl) {
-            preloadService.load(nextSong);
+            const startedAt = performance.now();
+            const preloadTrack = { ...nextSong };
+            const preloadState = () => ({
+              track: logTrack(preloadTrack),
+              sourceKind: audioSourceKind(preloadTrack.playMusicUrl),
+              elapsedMs: Math.round(performance.now() - startedAt),
+              selected: logTrack(usePlayerCoreStore().playMusic)
+            });
+            logPlayback('preload.start', preloadState());
+            try {
+              await preloadService.load(preloadTrack);
+              logPlayback('preload.ready', preloadState());
+            } catch (error) {
+              logPlayback('preload.failed', {
+                ...preloadState(),
+                ...playbackErrorFields(error)
+              });
+              // Preload failure must not fail or restart the currently playing song.
+            }
           }
           if (nextSong.picUrl) {
             preloadCoverImage(nextSong.picUrl, getImgUrl);
@@ -249,6 +272,7 @@ export const usePlaylistStore = defineStore(
       keepIndex: boolean = false,
       fromIntelligenceMode: boolean = false
     ) => {
+      navigationVersion++;
       // 如果不是从心动模式调用，清除心动模式状态并切换播放模式
       if (!fromIntelligenceMode) {
         const intelligenceStore = useIntelligenceModeStore();
@@ -365,6 +389,7 @@ export const usePlaylistStore = defineStore(
      * 清空播放列表
      */
     const clearPlayAll = async () => {
+      navigationVersion++;
       const { audioService } = await import('@/services/audioService');
       const playerCore = usePlayerCoreStore();
 
@@ -422,8 +447,9 @@ export const usePlaylistStore = defineStore(
      * 下一首
      * @param singleTrackRetryCount 单曲重试次数（同一首歌的重试）
      */
-    const _nextPlay = async (singleTrackRetryCount: number = 0) => {
+    const _nextPlay = async (singleTrackRetryCount = 0, version = navigationVersion) => {
       try {
+        if (version !== navigationVersion) return;
         if (playList.value.length === 0) {
           return;
         }
@@ -473,7 +499,20 @@ export const usePlaylistStore = defineStore(
         );
 
         // 先尝试播放歌曲
-        const success = await playerCore.handlePlayMusic(nextSong, true);
+        const pending = playerCore.handlePlayMusic(
+          nextSong,
+          true,
+          singleTrackRetryCount ? 'playlist-retry' : 'request'
+        );
+        const requestId = playbackRequestManager.getCurrentRequestId();
+        const current = () =>
+          version === navigationVersion &&
+          playbackRequestManager.getCurrentRequestId() === requestId;
+        const success = await pending;
+        if (!current()) {
+          logPlayback('playlist.advance-cancelled', { requestId, requested: logTrack(nextSong) });
+          return;
+        }
 
         if (success) {
           // 播放成功，重置所有计数器并更新索引
@@ -495,7 +534,7 @@ export const usePlaylistStore = defineStore(
             );
             // 不更新索引，重试同一首歌
             setTimeout(() => {
-              _nextPlay(singleTrackRetryCount + 1);
+              if (current()) void _nextPlay(singleTrackRetryCount + 1, version);
             }, 1000);
           } else {
             // 单曲重试次数用尽，递增连续失败计数，尝试下一首
@@ -511,7 +550,7 @@ export const usePlaylistStore = defineStore(
 
               // 延迟后尝试下一首（重置单曲重试计数）
               setTimeout(() => {
-                _nextPlay(0);
+                if (current()) void _nextPlay(0, version);
               }, 500);
             } else {
               // 只有一首歌且失败
@@ -525,12 +564,13 @@ export const usePlaylistStore = defineStore(
       }
     };
 
-    const nextPlay = useThrottleFn(_nextPlay, 500);
+    // UI click events must not become the internal retry-count argument.
+    const nextPlay = useThrottleFn(() => _nextPlay(0, ++navigationVersion), 500);
 
     /**
      * 上一首
      */
-    const _prevPlay = async () => {
+    const _prevPlay = async (version: number) => {
       try {
         if (playList.value.length === 0) {
           return;
@@ -553,7 +593,19 @@ export const usePlaylistStore = defineStore(
 
         // 先尝试播放歌曲，成功后再更新索引
         while (!success && retryCount < maxRetries) {
-          success = await playerCore.handlePlayMusic(prevSong);
+          if (version !== navigationVersion) return;
+          const pending = playerCore.handlePlayMusic(
+            prevSong,
+            true,
+            retryCount ? 'playlist-retry' : 'request'
+          );
+          const requestId = playbackRequestManager.getCurrentRequestId();
+          success = await pending;
+          if (
+            version !== navigationVersion ||
+            playbackRequestManager.getCurrentRequestId() !== requestId
+          )
+            return;
 
           if (!success) {
             retryCount++;
@@ -576,8 +628,13 @@ export const usePlaylistStore = defineStore(
                   playListIndex.value = newPrevIndex;
                 }
 
+                const continuationVersion = navigationVersion;
                 setTimeout(() => {
-                  prevPlay();
+                  if (
+                    continuationVersion === navigationVersion &&
+                    playbackRequestManager.getCurrentRequestId() === requestId
+                  )
+                    void _prevPlay(continuationVersion);
                 }, 300);
                 return;
               } else {
@@ -602,7 +659,7 @@ export const usePlaylistStore = defineStore(
       }
     };
 
-    const prevPlay = useThrottleFn(_prevPlay, 500);
+    const prevPlay = useThrottleFn(() => _prevPlay(++navigationVersion), 500);
 
     /**
      * 设置播放列表抽屉显示状态
@@ -615,6 +672,7 @@ export const usePlaylistStore = defineStore(
      * 设置播放（兼容旧API）
      */
     const setPlay = async (song: SongResult) => {
+      navigationVersion++;
       try {
         const playerCore = usePlayerCoreStore();
         logPlayback('playlist.selection', {
@@ -707,14 +765,7 @@ export const usePlaylistStore = defineStore(
 
         // playerCore 的状态由其自己的 store 管理
 
-        if (success) {
-          // 预加载下一首歌曲
-          if (songIndex !== -1) {
-            setTimeout(() => {
-              preloadNextSongs(playListIndex.value);
-            }, 3000);
-          }
-        }
+        // playerCore owns scheduling the next preload for the current request.
         return success;
       } catch (error) {
         console.error('设置播放失败:', error);
@@ -760,8 +811,8 @@ export const usePlaylistStore = defineStore(
       shufflePlayList,
       restoreOriginalOrder,
       preloadNextSongs,
-      nextPlay: nextPlay as unknown as typeof _nextPlay,
-      prevPlay: prevPlay as unknown as typeof _prevPlay,
+      nextPlay,
+      prevPlay,
       setPlayListDrawerVisible,
       setPlay,
       initializePlaylist,

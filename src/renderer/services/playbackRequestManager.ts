@@ -24,6 +24,7 @@ export interface PlaybackRequest {
   song: SongResult;
   status: RequestStatus;
   timestamp: number;
+  retrySourceFailures: boolean;
   abortController?: AbortController;
 }
 
@@ -47,7 +48,7 @@ class PlaybackRequestManager {
    * @param song 要播放的歌曲
    * @returns 新请求的ID
    */
-  createRequest(song: SongResult): string {
+  createRequest(song: SongResult, retrySourceFailures = false): string {
     // 取消所有之前的请求
     this.cancelAllRequests();
 
@@ -59,6 +60,7 @@ class PlaybackRequestManager {
       song,
       status: RequestStatus.PENDING,
       timestamp: Date.now(),
+      retrySourceFailures,
       abortController
     };
 

@@ -33,6 +33,11 @@ export default {
     list: '自动播放下一个'
   },
   lrc: {
+    loading: '正在加载歌词…',
+    autoRetrying: '正在自动重试歌词（{attempt}/{total}）…',
+    loadFailed: '歌词加载失败',
+    retry: '重试歌词',
+    refresh: '重新获取',
     noLrc: '暂无歌词, 请欣赏',
     noAutoScroll: '本歌词不支持自动滚动'
   },

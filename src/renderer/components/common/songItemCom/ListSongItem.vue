@@ -251,7 +251,7 @@ const onPlayMusic = () => {
   border-color: rgb(31 41 55); /* dark:border-gray-800 */
 
   &:hover {
-    background-color: rgb(31 41 55); /* dark:bg-gray-800 */
+    background-color: var(--app-surface-hover);
   }
 
   .song-item-content {

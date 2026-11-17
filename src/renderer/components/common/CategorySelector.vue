@@ -1,5 +1,5 @@
 <template>
-  <div class="border-b border-gray-100 dark:border-gray-800 bg-white dark:bg-black z-10">
+  <div class="category-selector app-panel rounded-2xl overflow-hidden z-10">
     <n-scrollbar ref="scrollbarRef" x-scrollable>
       <div
         class="flex items-center py-4 page-padding"
@@ -9,11 +9,11 @@
         <span
           v-for="(category, index) in categories"
           :key="getItemKey(category, index)"
-          class="py-1.5 px-4 mr-3 inline-block rounded-full cursor-pointer transition-all duration-300 text-sm font-medium bg-gray-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-gray-200 dark:hover:bg-neutral-700 hover:text-neutral-900 dark:hover:text-white"
+          class="category-chip py-1.5 px-4 mr-3 inline-block rounded-full cursor-pointer transition-all duration-300 text-sm font-medium text-neutral-600 dark:text-neutral-400"
           :class="[
             animationClass,
             index === 0 ? 'ml-0.5' : '',
-            isActive(category) ? 'bg-primary text-white shadow-lg shadow-primary/25 scale-105' : ''
+            { 'category-chip--active': isActive(category) }
           ]"
           :style="getAnimationDelay(index)"
           @click="handleClickCategory(category)"
@@ -102,3 +102,16 @@ defineExpose({
   scrollbarRef
 });
 </script>
+
+<style scoped>
+.category-chip {
+  background: var(--app-surface-muted);
+}
+.category-chip:hover {
+  background: var(--app-surface-hover);
+}
+.category-chip.category-chip--active {
+  background: #22c55e;
+  color: #fff;
+}
+</style>

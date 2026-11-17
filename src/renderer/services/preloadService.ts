@@ -3,6 +3,7 @@ import { Howl } from 'howler';
 import type { SongResult } from '@/types/music';
 import { logTrack } from '@/utils/playbackLog';
 
+import { playbackMediaUrl } from '../../shared/localMedia';
 import { playbackSourceKey } from './playbackDecision';
 
 class PreloadService {
@@ -106,7 +107,7 @@ class PreloadService {
   private _createSound(url: string): Promise<Howl> {
     return new Promise((resolve, reject) => {
       const sound = new Howl({
-        src: [url],
+        src: [playbackMediaUrl(url)],
         html5: true,
         preload: true,
         autoplay: false,

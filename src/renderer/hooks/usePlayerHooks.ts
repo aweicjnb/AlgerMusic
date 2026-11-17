@@ -8,6 +8,16 @@ import { SongSourceConfigManager } from '@/services/SongSourceConfigManager';
 import type { ILyric, ILyricText, IWordData, SongResult } from '@/types/music';
 import { getImgUrl, isElectron } from '@/utils';
 import { getImageLinearBackground } from '@/utils/linearColor';
+import {
+  emptyLyric,
+  failedLyric,
+  getOnlineLyricId,
+  isLyricResponse,
+  isRetryableLyricError,
+  lyricFailureReason,
+  LyricLoadError,
+  type LyricRequestOptions
+} from '@/utils/lyricState';
 import { audioSourceKind, logPlayback, playbackErrorFields } from '@/utils/playbackLog';
 import { parseLyrics as parseYrcLyrics } from '@/utils/yrcParser';
 
@@ -231,7 +241,12 @@ export const getSongUrl = async (
     // 正常获取URL流程
     const { data } = await attempt(
       'official',
-      () => getMusicUrl(numericId, isDownloaded),
+      () =>
+        getMusicUrl(
+          numericId,
+          isDownloaded,
+          requestId ? playbackRequestManager.getAbortSignal(requestId) : undefined
+        ),
       (result) => {
         const detail = result?.data?.data?.[0];
         return {
@@ -292,6 +307,8 @@ export const getSongUrl = async (
     const parsedUrl = res?.data?.data?.url || null;
     return await resolve(parsedUrl);
   } catch (error) {
+    if (requestId && !playbackRequestManager.isRequestValid(requestId))
+      throw new Error('Request cancelled');
     if ((error as Error).message === 'Request cancelled') {
       throw error;
     }
@@ -361,32 +378,51 @@ const parseLyrics = (lyricsString: string): { lyrics: ILyricText[]; times: numbe
 /**
  * 加载歌词（独立函数）
  */
-export const loadLrc = async (id: string | number): Promise<ILyric> => {
+export const loadLrc = async (
+  id: string | number,
+  options: LyricRequestOptions = {}
+): Promise<ILyric> => {
+  const startedAt = performance.now();
+  let source = 'lyric-service';
+  logPlayback('lyric.load-start', { songId: id });
   try {
-    const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+    const numericId = getOnlineLyricId(id);
+    if (numericId === null) {
+      logPlayback('lyric.load-skipped', { songId: id, reason: 'no-online-lyric-id' });
+      return emptyLyric();
+    }
+    options.signal?.throwIfAborted();
     let lyricData: any;
 
-    if (isElectron) {
+    if (isElectron && !options.forceRefresh) {
       try {
         lyricData = await window.electron.ipcRenderer.invoke('get-cached-lyric', numericId);
+        options.signal?.throwIfAborted();
+        if (lyricData && !isLyricResponse(lyricData)) {
+          logPlayback('lyric.cache-invalid', { songId: id, source: 'disk-cache' });
+          lyricData = undefined;
+        }
+        if (lyricData) source = 'disk-cache';
       } catch (error) {
         console.warn('读取磁盘歌词缓存失败:', error);
       }
     }
 
     if (!lyricData) {
-      const { data } = await getMusicLrc(numericId);
+      options.signal?.throwIfAborted();
+      const { data } = await getMusicLrc(numericId, options);
       lyricData = data;
-
-      if (isElectron && lyricData) {
-        void window.electron.ipcRenderer
-          .invoke('cache-lyric', numericId, lyricData)
-          .catch((error) => console.warn('写入磁盘歌词缓存失败:', error));
-      }
     }
 
     const data = lyricData ?? {};
+    if (!isLyricResponse(data)) throw new LyricLoadError('response');
     const { lyrics, times } = parseLyrics(data?.yrc?.lyric || data?.lrc?.lyric);
+    const rawText = data?.yrc?.lyric || data?.lrc?.lyric || '';
+    const confirmedEmpty =
+      data.nolyric === true || data.uncollected === true || data.pureMusic === true;
+    if (!confirmedEmpty && rawText.trim() && !lyrics.some((line) => line.text.trim())) {
+      throw new LyricLoadError('parse');
+    }
 
     // 检查是否有逐字歌词
     let hasWordByWord = false;
@@ -446,18 +482,38 @@ export const loadLrc = async (id: string | number): Promise<ILyric> => {
       });
     }
 
+    options.signal?.throwIfAborted();
+    if (isElectron && source !== 'disk-cache') {
+      void window.electron.ipcRenderer
+        .invoke('cache-lyric', numericId, data)
+        .catch((error) => console.warn('写入磁盘歌词缓存失败:', error));
+    }
+    logPlayback('lyric.load-complete', {
+      songId: id,
+      source,
+      format: data?.yrc?.lyric ? 'yrc' : 'lrc',
+      rawLength: (data?.yrc?.lyric || data?.lrc?.lyric || '').length,
+      lineCount: lyrics.length,
+      timedLineCount: times.filter((time) => Number.isFinite(time) && time >= 0).length,
+      wordByWord: hasWordByWord,
+      elapsedMs: Math.round(performance.now() - startedAt)
+    });
     return {
-      lrcTimeArray: times,
-      lrcArray: lyrics,
-      hasWordByWord
+      lrcTimeArray: confirmedEmpty ? [] : times,
+      lrcArray: confirmedEmpty ? [] : lyrics,
+      hasWordByWord: confirmedEmpty ? false : hasWordByWord,
+      loadState: confirmedEmpty || !lyrics.some((line) => line.text.trim()) ? 'empty' : 'ready'
     };
   } catch (err) {
+    logPlayback('lyric.load-failed', {
+      songId: id,
+      source,
+      reason: lyricFailureReason(err),
+      elapsedMs: Math.round(performance.now() - startedAt),
+      ...playbackErrorFields(err)
+    });
     console.error('Error loading lyrics:', err);
-    return {
-      lrcTimeArray: [],
-      lrcArray: [],
-      hasWordByWord: false
-    };
+    return failedLyric(lyricFailureReason(err), isRetryableLyricError(err));
   }
 };
 

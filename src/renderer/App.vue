@@ -1,6 +1,9 @@
 <template>
   <div class="app-container h-full w-full" :class="{ mobile: isMobile, noElectron: !isElectron }">
-    <n-config-provider :theme="theme === 'dark' ? darkTheme : lightTheme">
+    <n-config-provider
+      :theme="theme === 'dark' ? darkTheme : lightTheme"
+      :theme-overrides="surfaceTheme"
+    >
       <n-dialog-provider>
         <n-message-provider>
           <router-view></router-view>
@@ -12,8 +15,8 @@
 
 <script setup lang="ts">
 import { cloneDeep } from 'lodash';
-import { darkTheme, lightTheme } from 'naive-ui';
-import { computed, nextTick, onMounted, watch } from 'vue';
+import { darkTheme, type GlobalThemeOverrides, lightTheme } from 'naive-ui';
+import { computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useRouter } from 'vue-router';
 
@@ -28,6 +31,7 @@ import { logPlayback, playbackErrorFields } from '@/utils/playbackLog';
 import { initAudioListeners, initMusicHook } from './hooks/MusicHook';
 import { audioService } from './services/audioService';
 import { initLxMusicRunner } from './services/LxMusicSourceRunner';
+import { startPlaybackDiagnostics } from './services/playbackDiagnostics';
 import { isMobile } from './utils';
 import { useAppShortcuts } from './utils/appShortcuts';
 
@@ -37,6 +41,15 @@ const playerStore = usePlayerStore();
 const playerCoreStore = usePlayerCoreStore();
 const userStore = useUserStore();
 const router = useRouter();
+const surfaceTheme: GlobalThemeOverrides = {
+  Dropdown: {
+    color: 'var(--app-popup-surface)',
+    optionColorHover: 'var(--app-surface-hover)',
+    dividerColor: 'var(--app-surface-border)'
+  },
+  Popover: { color: 'var(--app-popup-surface)' },
+  Drawer: { color: 'var(--app-popup-surface)' }
+};
 
 // 监听语言变化
 watch(
@@ -116,12 +129,18 @@ if (isElectron) {
 
 // 使用应用内快捷键
 useAppShortcuts();
+let stopPlaybackDiagnostics: (() => void) | undefined;
+onBeforeUnmount(() => stopPlaybackDiagnostics?.());
 
 onMounted(async () => {
   playerStore.setIsPlay(false);
   if (isLyricWindow.value) {
     return;
   }
+  stopPlaybackDiagnostics = startPlaybackDiagnostics(() => ({
+    ...audioService.getPlaybackDiagnostics(),
+    actualPlaying: audioService.getCurrentSound()?.playing() ?? false
+  }));
 
   // 检查网络状态，离线时自动跳转到本地音乐页面
   if (!navigator.onLine) {

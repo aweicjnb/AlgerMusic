@@ -34,6 +34,11 @@ export default {
     list: '자동으로 다음 곡 재생'
   },
   lrc: {
+    loading: '가사 불러오는 중…',
+    autoRetrying: '가사 자동 재시도 중 ({attempt}/{total})…',
+    loadFailed: '가사를 불러오지 못했습니다',
+    retry: '가사 다시 시도',
+    refresh: '다시 불러오기',
     noLrc: '가사가 없습니다. 음악을 감상해주세요',
     noAutoScroll: '본 가사는 자동 스크롤을 지원하지 않습니다'
   },

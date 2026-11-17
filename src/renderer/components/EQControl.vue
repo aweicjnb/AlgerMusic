@@ -1,5 +1,5 @@
 <template>
-  <div class="eq-control p-6 rounded-lg bg-gray-100 dark:bg-gray-900 w-full max-w-[700px]">
+  <div class="eq-control w-full max-w-[700px]">
     <div class="eq-header flex justify-between items-center mb-4">
       <h3 class="text-xl font-semibold text-gray-800 dark:text-gray-200">
         {{ t('player.eq.title') }}
@@ -35,7 +35,8 @@
     </div>
 
     <div
-      class="eq-sliders flex justify-between items-end bg-gray-50 dark:bg-gray-800 gap-1 rounded-lg p-2 h-[300px]"
+      class="eq-sliders flex justify-between items-end gap-1 rounded-lg p-2 h-[300px]"
+      style="background-color: var(--app-surface-muted)"
     >
       <div
         v-for="freq in frequencies"

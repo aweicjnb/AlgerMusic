@@ -41,11 +41,11 @@
     <div class="search-wrap" :class="isSearchExpanded ? 'search-wrap--open' : 'search-wrap--idle'">
       <n-popover
         trigger="manual"
-        placement="bottom-end"
+        placement="bottom-start"
         :show="showSuggestions"
         :show-arrow="false"
         style="margin-top: 6px"
-        content-style="padding:0;border-radius:12px;overflow:hidden;box-shadow:0 6px 24px rgba(0,0,0,0.12);"
+        content-style="padding:0;"
         raw
       >
         <template #trigger>
@@ -498,16 +498,14 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   height: 34px;
-  background: #f3f4f6;
+  background: var(--app-control-surface);
+  border: 1px solid var(--app-surface-border);
+  backdrop-filter: blur(18px) saturate(0.8);
   border-radius: 9999px;
   padding: 3px;
   gap: 0;
   box-sizing: border-box;
 }
-.dark .tabs-track {
-  background: #1f2937;
-}
-
 .tab-slider-bg {
   position: absolute;
   top: 3px;
@@ -581,6 +579,7 @@ onMounted(() => {
 
 /* ── Search wrap ─────────────────────────────────────── */
 .search-wrap {
+  min-width: 0;
   transition:
     flex 0.3s cubic-bezier(0.4, 0, 0.2, 1),
     max-width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -601,25 +600,17 @@ onMounted(() => {
   height: 34px;
   padding: 0 10px;
   border-radius: 9999px;
-  border: 1.5px solid #e5e7eb;
-  background: #f9fafb;
+  border: 1px solid var(--search-border);
+  background: var(--search-surface);
+  backdrop-filter: blur(18px) saturate(0.8);
   transition:
     border-color 0.2s,
     background 0.2s,
     box-shadow 0.2s;
 }
-.dark .search-inner {
-  border-color: #374151;
-  background: #111827;
-}
 .search-inner--focus {
-  border-color: #22c55e;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
-}
-.dark .search-inner--focus {
-  background: #0a0a0a;
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.65);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.08);
 }
 
 .search-icon-glyph {
@@ -654,7 +645,7 @@ onMounted(() => {
   gap: 3px;
   padding: 2px 7px;
   border-radius: 6px;
-  background: #f3f4f6;
+  background: var(--search-chip-surface);
   font-size: 11px;
   font-weight: 500;
   color: #6b7280;
@@ -666,7 +657,6 @@ onMounted(() => {
   flex-shrink: 0;
 }
 .dark .type-chip {
-  background: #1f2937;
   color: #9ca3af;
 }
 .type-chip:hover {
@@ -763,15 +753,10 @@ onMounted(() => {
   min-width: 220px;
   border-radius: 12px;
   overflow: hidden;
-  background: #fff;
-  border: 1px solid #f3f4f6;
-  box-shadow:
-    0 4px 20px rgba(0, 0, 0, 0.1),
-    0 1px 4px rgba(0, 0, 0, 0.05);
-}
-.dark .user-menu {
-  background: #111827;
-  border-color: #1f2937;
+  background: var(--app-popup-surface);
+  border: 1px solid var(--app-surface-border);
+  box-shadow: var(--app-popup-shadow);
+  backdrop-filter: blur(18px) saturate(0.8);
 }
 
 .user-menu-top {
@@ -783,10 +768,7 @@ onMounted(() => {
   transition: background 0.15s;
 }
 .user-menu-top:hover {
-  background: #f9fafb;
-}
-.dark .user-menu-top:hover {
-  background: #1f2937;
+  background: var(--app-surface-hover);
 }
 
 .user-name {
@@ -803,11 +785,8 @@ onMounted(() => {
 
 .menu-sep {
   height: 1px;
-  background: #f3f4f6;
+  background: var(--app-surface-border);
   margin: 2px 0;
-}
-.dark .menu-sep {
-  background: #1f2937;
 }
 
 .menu-list {
@@ -828,10 +807,7 @@ onMounted(() => {
   color: #d1d5db;
 }
 .menu-row:hover {
-  background: #f9fafb;
-}
-.dark .menu-row:hover {
-  background: #1f2937;
+  background: var(--app-surface-hover);
 }
 
 .menu-row i {
@@ -855,8 +831,8 @@ onMounted(() => {
   height: 18px;
   border-radius: 4px;
   border: none;
-  background: #f3f4f6;
-  color: #6b7280;
+  background: var(--app-surface-muted);
+  color: inherit;
   font-size: 10px;
   cursor: pointer;
   transition: all 0.12s;
@@ -870,7 +846,7 @@ onMounted(() => {
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 4px;
-  background: #f3f4f6;
+  background: var(--app-surface-muted);
   color: #6b7280;
   cursor: pointer;
   transition: all 0.12s;
@@ -879,48 +855,62 @@ onMounted(() => {
   background: #dcfce7;
   color: #16a34a;
 }
+.zoom-val:not(.zoom-val--100) {
+  color: inherit;
+}
 .ver-chip {
   font-size: 11px;
   font-weight: 500;
   padding: 1px 6px;
   border-radius: 5px;
-  background: #f3f4f6;
+  background: var(--app-surface-muted);
   color: #6b7280;
 }
 .dark .ver-chip {
-  background: #1f2937;
   color: #9ca3af;
 }
 
 /* ── Suggestions ─────────────────────────────────────── */
 .suggestions-box {
-  background: #fff;
-}
-.dark .suggestions-box {
-  background: #111827;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  padding: 4px;
+  border: 1px solid var(--search-border);
+  border-radius: 16px;
+  background: var(--search-popup-surface);
+  box-shadow: var(--search-popup-shadow);
+  backdrop-filter: blur(18px) saturate(0.8);
 }
 
 .suggest-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
+  padding: 9px 10px;
+  border-radius: 10px;
   font-size: 13px;
   color: #374151;
   cursor: pointer;
   transition: background 0.1s;
+}
+.suggest-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dark .suggest-row {
   color: #d1d5db;
 }
 .suggest-row:hover,
 .suggest-row--hi {
-  background: #f0fdf4;
+  background: rgba(34, 197, 94, 0.1);
   color: #16a34a;
 }
 .dark .suggest-row:hover,
 .dark .suggest-row--hi {
-  background: rgba(34, 197, 94, 0.06);
+  background: rgba(34, 197, 94, 0.1);
   color: #22c55e;
 }
 .suggest-icon {

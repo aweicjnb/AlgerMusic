@@ -75,7 +75,7 @@
           >
             <div class="lyrics-padding-top"></div>
             <!-- 无时间戳歌词提示 -->
-            <div v-if="!supportAutoScroll" class="lyric-line no-scroll-tip">
+            <div v-if="lrcArray.length > 0 && !supportAutoScroll" class="lyric-line no-scroll-tip">
               <span>{{ t('player.lrc.noAutoScroll') }}</span>
             </div>
             <div
@@ -106,6 +106,7 @@
                 {{ item.trText }}
               </div>
             </div>
+            <lyric-load-state v-if="lyricLoadStatus !== 'ready'" :style="lyricStateStyle" />
             <div class="lyrics-padding-bottom"></div>
           </div>
         </div>
@@ -181,9 +182,7 @@
                   <span v-else>{{ line.text }}</span>
                 </div>
               </div>
-              <div v-else class="no-lyrics">
-                {{ t('player.lrc.noLrc') }}
-              </div>
+              <lyric-load-state v-else compact :style="lyricStateStyle" />
             </div>
           </div>
         </div>
@@ -277,7 +276,7 @@
           >
             <div class="lyrics-padding-top"></div>
             <!-- 无时间戳歌词提示 -->
-            <div v-if="!supportAutoScroll" class="lyric-line no-scroll-tip">
+            <div v-if="lrcArray.length > 0 && !supportAutoScroll" class="lyric-line no-scroll-tip">
               <span>{{ t('player.lrc.noAutoScroll') }}</span>
             </div>
             <div
@@ -308,6 +307,7 @@
                 {{ item.trText }}
               </div>
             </div>
+            <lyric-load-state v-if="lyricLoadStatus !== 'ready'" :style="lyricStateStyle" />
             <div class="lyrics-padding-bottom"></div>
           </div>
 
@@ -393,12 +393,14 @@ import { useWindowSize } from '@vueuse/core';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
+import LyricLoadState from '@/components/lyric/LyricLoadState.vue';
 import MobilePlayerSettings from '@/components/player/MobilePlayerSettings.vue';
 import {
   allTime,
   artistList,
   correctionTime,
   lrcArray,
+  lyricLoadStatus,
   nowIndex,
   nowTime,
   playMusic,
@@ -928,6 +930,9 @@ const themeMusic = {
   light: 'linear-gradient(to bottom, #ffffff, #f5f5f5)',
   dark: 'linear-gradient(to bottom, #1a1a1a, #000000)'
 };
+const lyricStateStyle = computed(() => ({
+  color: getTextColors(playerStore.playMusic.primaryColor || props.background).active
+}));
 
 const emit = defineEmits(['update:modelValue']);
 

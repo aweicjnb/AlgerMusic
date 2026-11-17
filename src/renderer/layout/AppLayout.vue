@@ -145,11 +145,11 @@ provide('openPlaylistDrawer', openPlaylistDrawer);
 }
 
 .layout-main {
-  @apply w-full h-full relative text-gray-900 dark:text-white;
+  @apply w-full h-full relative flex flex-col text-gray-900 dark:text-white;
 }
 
 .layout-main-page {
-  @apply flex h-full;
+  @apply flex flex-1 min-h-0;
 }
 
 .menu {
@@ -157,11 +157,11 @@ provide('openPlaylistDrawer', openPlaylistDrawer);
 }
 
 .main {
-  @apply overflow-hidden flex-1 flex flex-col;
+  @apply overflow-hidden flex-1 min-w-0 min-h-0 flex flex-col;
 }
 
 .main-content {
-  @apply flex-1 overflow-hidden;
+  @apply flex-1 min-h-0 overflow-hidden;
 }
 
 .main-page {

@@ -119,8 +119,8 @@
     if (!cfg.enabled || root.classList.contains('ct-off')) return;
     const host = document.querySelector('.layout-page .main-content');
     if (!host) return;
-    // 设置页有明确的背景层，不需要遍历表单测量布局。
-    if (host.querySelector('.settings-page')) return;
+    // 设置与用户页有明确的背景层，不需要再推测和改写面板。
+    if (host.querySelector('.settings-page, .user-page')) return;
     const box = host.getBoundingClientRect();
     const hostArea = box.width * box.height;
     if (hostArea < 1) return;
@@ -136,6 +136,9 @@
           const area = r.width * r.height;
           if (area < hostArea * 0.02 || r.width < box.width * 0.4) continue;
           const cl = child.classList;
+          // 明确声明的面板与操作栏自己管理背景，不再按面积推测。
+          if (cl.contains('app-panel') || cl.contains('app-popup') || cl.contains('action-bar'))
+            continue;
           if (cl.contains('ct-glass')) continue;
           if (cl.contains('ct-clear')) {
             next.push({ el: child, covered });

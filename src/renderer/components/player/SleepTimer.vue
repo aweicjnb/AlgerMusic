@@ -245,8 +245,8 @@ onUnmounted(() => {
 
     // 定时状态卡片
     .timer-status {
-      @apply flex flex-col items-center justify-center p-8 mb-5 w-full rounded-2xl dark:bg-gray-800 dark:bg-opacity-40 dark:shadow-gray-900/20;
-      background-color: rgba(255, 255, 255, 0.5);
+      @apply flex flex-col items-center justify-center p-8 mb-5 w-full rounded-2xl dark:shadow-gray-900/20;
+      background-color: var(--app-surface-muted);
       box-shadow:
         0 1px 3px rgba(0, 0, 0, 0.05),
         0 0 0 1px rgba(255, 255, 255, 0.1);
@@ -305,8 +305,7 @@ onUnmounted(() => {
         .time-option-btn,
         .songs-option-btn {
           @apply px-4 py-2 rounded-full text-gray-800 dark:text-gray-200 transition-all duration-200;
-          background-color: rgba(255, 255, 255, 0.5);
-          @apply dark:bg-gray-800 dark:bg-opacity-40 hover:bg-white dark:hover:bg-gray-700;
+          background-color: var(--app-surface-muted);
           box-shadow:
             0 1px 2px rgba(0, 0, 0, 0.05),
             0 0 0 1px rgba(255, 255, 255, 0.1);
@@ -314,6 +313,7 @@ onUnmounted(() => {
 
           &:hover {
             @apply transform scale-105 shadow-md;
+            background-color: var(--app-surface-hover);
           }
 
           &:active {

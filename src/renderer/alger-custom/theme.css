@@ -1,13 +1,64 @@
 /* 自定义外观：主界面壁纸、界面透明度、夜间模式亮度。配合 theme.js 使用。 */
 
 :root {
+  color-scheme: light;
   --ct-a: 0.55;
   --ct-lift: 0;
   --ct-image: none;
   --ct-tint: rgb(255 255 255 / var(--ct-a));
+  --app-panel-surface: #fff;
+  --app-control-surface: #f9fafb;
+  --app-popup-surface: #fff;
+  --app-surface-border: rgb(0 0 0 / 0.08);
+  --app-surface-muted: rgb(0 0 0 / 0.045);
+  --app-surface-hover: rgb(0 0 0 / 0.06);
+  --app-popup-shadow: 0 8px 28px rgb(0 0 0 / 0.12);
+  --search-surface: var(--app-control-surface);
+  --search-popup-surface: var(--app-popup-surface);
+  --search-border: var(--app-surface-border);
+  --search-chip-surface: var(--app-surface-muted);
+  --search-popup-shadow: var(--app-popup-shadow);
 }
 html.dark {
+  color-scheme: dark;
   --ct-tint: rgb(0 0 0 / var(--ct-a));
+  --app-panel-surface: #18191d;
+  --app-control-surface: #202226;
+  --app-popup-surface: #202226;
+  --app-surface-border: rgb(255 255 255 / 0.1);
+  --app-surface-muted: rgb(255 255 255 / 0.06);
+  --app-surface-hover: rgb(255 255 255 / 0.08);
+  --app-popup-shadow: 0 8px 28px rgb(0 0 0 / 0.28);
+}
+
+/* 弹层传送到 body，共用根节点配色，避免与页面面板脱节。 */
+html.ct-wall:not(.ct-off) {
+  --app-panel-surface: rgb(255 255 255 / clamp(0.8, calc(var(--ct-a) + 0.24), 0.94));
+  --app-control-surface: var(--app-panel-surface);
+  --app-popup-surface: rgb(255 255 255 / clamp(0.9, calc(var(--ct-a) + 0.32), 0.98));
+  --app-surface-border: rgb(255 255 255 / 0.5);
+}
+html.ct-wall.dark:not(.ct-off) {
+  --app-panel-surface: rgb(20 22 27 / clamp(0.7, calc(var(--ct-a) + 0.18), 0.9));
+  --app-control-surface: var(--app-panel-surface);
+  --app-popup-surface: rgb(20 22 27 / clamp(0.86, calc(var(--ct-a) + 0.26), 0.96));
+  --app-surface-border: rgb(255 255 255 / 0.09);
+}
+
+.app-panel,
+.app-popup {
+  border: 1px solid var(--app-surface-border);
+  backdrop-filter: blur(18px) saturate(0.8);
+}
+.app-panel {
+  background-color: var(--app-panel-surface);
+}
+.app-popup {
+  background-color: var(--app-popup-surface);
+  box-shadow: var(--app-popup-shadow);
+}
+html.ct-wall:not(.ct-off) :is(.n-dropdown-menu, .n-popover:not(.n-popover--raw), .n-drawer) {
+  backdrop-filter: blur(18px) saturate(0.8);
 }
 
 /* ---------- 壁纸 ---------- */
@@ -33,37 +84,37 @@ html.ct-wall:not(.ct-off) .layout-page .ct-clear {
 
 /* 直接压在壁纸上的大面板：半透明，跟随“界面透明度” */
 html.ct-wall:not(.ct-off) .layout-page .ct-pane {
-  background-color: rgb(255 255 255 / calc(var(--ct-a) * 0.5)) !important;
-}
-html.ct-wall.dark:not(.ct-off) .layout-page .ct-pane {
-  background-color: rgb(0 0 0 / calc(var(--ct-a) * 0.5)) !important;
+  background-color: var(--app-panel-surface) !important;
+  backdrop-filter: blur(18px) saturate(0.8);
 }
 
 /* 设置表单保持稳定对比度，壁纸仍能隐约透出。 */
 html.ct-wall:not(.ct-off) .layout-page .main-content .settings-page {
-  background-color: rgb(255 255 255 / 0.86) !important;
+  background-color: var(--app-panel-surface) !important;
 }
-html.ct-wall.dark:not(.ct-off) .layout-page .main-content .settings-page {
-  background-color: rgb(0 0 0 / 0.78) !important;
+
+/* 用户资料与听歌排行使用同一层面板，内部列表只在交互时着色。 */
+html.ct-wall:not(.ct-off) .user-page {
+  --profile-surface: var(--app-panel-surface);
+  --profile-border: var(--app-surface-border);
+}
+html.ct-wall:not(.ct-off) .user-page .user-panel {
+  backdrop-filter: blur(18px) saturate(0.8);
 }
 
 html.ct-wall:not(.ct-off) .history-page > .flex-item,
-html.ct-wall:not(.ct-off) .local-music-page .empty-state {
-  background-color: rgb(255 255 255 / 0.86) !important;
+html.ct-wall:not(.ct-off) .local-music-page .empty-state,
+html.ct-wall:not(.ct-off) .download-page .empty-state {
+  background-color: var(--app-panel-surface) !important;
+  backdrop-filter: blur(18px) saturate(0.8);
   border-radius: 1.5rem;
 }
-html.ct-wall.dark:not(.ct-off) .history-page > .flex-item,
-html.ct-wall.dark:not(.ct-off) .local-music-page .empty-state {
-  background-color: rgb(15 15 15 / 0.86) !important;
-}
-
 /* 整行宽的标题栏、标签栏：毛玻璃 */
-html.ct-wall:not(.ct-off) .layout-page .ct-glass {
-  background-color: rgb(255 255 255 / calc(var(--ct-a) * 0.5 + 0.1)) !important;
-  backdrop-filter: blur(14px);
-}
-html.ct-wall.dark:not(.ct-off) .layout-page .ct-glass {
-  background-color: rgb(0 0 0 / calc(var(--ct-a) * 0.5 + 0.1)) !important;
+html.ct-wall:not(.ct-off) .layout-page .ct-glass,
+html.ct-wall:not(.ct-off) .layout-page .action-bar {
+  background-color: var(--app-control-surface) !important;
+  border-color: var(--app-surface-border);
+  backdrop-filter: blur(18px) saturate(0.8);
 }
 
 html.ct-wall:not(.ct-off) .layout-page .music-play-bar {

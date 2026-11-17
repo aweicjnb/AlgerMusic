@@ -19,7 +19,7 @@
         {{ t('player.playBar.reparse') }}
       </n-tooltip>
     </template>
-    <div class="reparse-popover bg-light-100 dark:bg-dark-100 p-4 rounded-xl max-w-60">
+    <div class="reparse-popover app-popup p-4 rounded-xl max-w-60">
       <div class="text-base font-medium mb-2">{{ t('player.reparse.title') }}</div>
       <div class="text-sm opacity-70 mb-3">{{ t('player.reparse.desc') }}</div>
       <div class="mb-3 max-h-80 overflow-y-auto">
@@ -35,11 +35,9 @@
               :key="source.id"
               class="source-button flex items-center p-2 rounded-lg transition-all duration-200"
               :class="[
-                source.available
-                  ? 'cursor-pointer bg-light-200 dark:bg-dark-200 hover:bg-light-300 dark:hover:bg-dark-300'
-                  : 'opacity-40 cursor-not-allowed bg-light-200 dark:bg-dark-200',
+                source.available ? 'cursor-pointer' : 'opacity-40 cursor-not-allowed',
                 {
-                  'bg-green-50 dark:bg-green-900/20 text-green-500': isCurrentSource(source.id),
+                  'source-button--current text-green-500': isCurrentSource(source.id),
                   'opacity-50 cursor-not-allowed': isReparsing && source.available
                 }
               ]"
@@ -332,6 +330,10 @@ watch(
 .source-button {
   &:hover:not(.opacity-50):not(.opacity-40) {
     @apply transform -translate-y-0.5 shadow-sm;
+    background-color: var(--app-surface-hover);
+  }
+  &.source-button--current {
+    background-color: rgb(34 197 94 / 0.1);
   }
 }
 

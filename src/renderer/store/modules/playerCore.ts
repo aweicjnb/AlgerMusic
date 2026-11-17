@@ -5,7 +5,8 @@ import { computed, ref } from 'vue';
 
 import i18n from '@/../i18n/renderer';
 import { getParsingMusicUrl } from '@/api/music';
-import { useLyrics, useSongDetail } from '@/hooks/usePlayerHooks';
+import { loadCurrentLyrics } from '@/hooks/MusicHook';
+import { useSongDetail } from '@/hooks/usePlayerHooks';
 import { audioService } from '@/services/audioService';
 import { chooseResumePosition, isCurrentPlaybackAttempt } from '@/services/playbackDecision';
 import { playbackRequestManager } from '@/services/playbackRequestManager';
@@ -32,7 +33,8 @@ import {
 import { usePlayHistoryStore } from './playHistory';
 
 const { message } = createDiscreteApi(['message']);
-type PlaybackTrigger = 'request' | 'startup' | 'play-error' | 'start-timeout' | 'source-recovery';
+type PlaybackTrigger =
+  'request' | 'startup' | 'play-error' | 'start-timeout' | 'source-recovery' | 'playlist-retry';
 interface PlaybackOrigin {
   parentRequestId?: string;
   parentAudioAttempt?: number;
@@ -88,7 +90,7 @@ export const usePlayerCoreStore = defineStore(
       const next = reducePlaybackSession(previous, event);
       if (next === previous) return;
       playbackSession.value = next;
-      playMusic.value.playLoading = next.phase === 'loading';
+      if (playMusic.value.id != null) playMusic.value.playLoading = next.phase === 'loading';
       if (next.phase !== previous.phase) {
         logPlayback('playback.state', {
           requestId: next.requestId,
@@ -409,10 +411,16 @@ export const usePlayerCoreStore = defineStore(
       // 创建新的播放请求并取消之前的所有请求
       const requestStartedAt = performance.now();
       const previousRequestId = playbackRequestManager.getCurrentRequestId();
-      const requestId = playbackRequestManager.createRequest(music);
+      const requestId = playbackRequestManager.createRequest(music, trigger === 'request');
       clearPlaybackCheck?.();
       const requested = logTrack(music);
-      const requestLog = { requestId, trigger, requested, ...origin };
+      const requestLog = {
+        requestId,
+        trigger,
+        requested,
+        retrySourceFailures: trigger === 'request',
+        ...origin
+      };
       const requestState = () => ({
         ...requestLog,
         currentRequestId: playbackRequestManager.getCurrentRequestId(),
@@ -459,24 +467,16 @@ export const usePlayerCoreStore = defineStore(
 
       const originalMusic = { ...music };
 
-      const { loadLrc } = useLyrics();
       const { getSongDetail } = useSongDetail();
 
-      // 并行加载歌词和背景色
-      const metadata = Promise.all([
-        (async () => {
-          if (music.lyric && music.lyric.lrcTimeArray.length > 0) {
-            return music.lyric;
-          }
-          return await loadLrc(music.id);
-        })(),
-        (async () => {
-          if (music.backgroundColor && music.primaryColor) {
-            return { backgroundColor: music.backgroundColor, primaryColor: music.primaryColor };
-          }
-          return await getImageLinearBackground(getImgUrl(music?.picUrl, '30y30'));
-        })()
-      ]);
+      // 歌词独立加载，失败或慢响应不阻塞音频开始，也不修改播放请求。
+      void loadCurrentLyrics();
+      const metadata = (async () => {
+        if (music.backgroundColor && music.primaryColor) {
+          return { backgroundColor: music.backgroundColor, primaryColor: music.primaryColor };
+        }
+        return await getImageLinearBackground(getImgUrl(music?.picUrl, '30y30'));
+      })();
       let metadataResult: Awaited<typeof metadata>;
       try {
         metadataResult = await metadata;
@@ -493,7 +493,7 @@ export const usePlayerCoreStore = defineStore(
         playbackRequestManager.failRequest(requestId);
         return false;
       }
-      const [lyrics, { backgroundColor, primaryColor }] = metadataResult;
+      const { backgroundColor, primaryColor } = metadataResult;
 
       // 在更新状态前再次验证请求
       if (!playbackRequestManager.isRequestValid(requestId)) {
@@ -503,7 +503,7 @@ export const usePlayerCoreStore = defineStore(
       }
 
       // 设置歌词和背景色
-      music.lyric = lyrics;
+      music.lyric = playMusic.value.lyric;
       music.backgroundColor = backgroundColor;
       music.primaryColor = primaryColor;
       music.playLoading = true;
@@ -544,7 +544,7 @@ export const usePlayerCoreStore = defineStore(
           return false;
         }
 
-        updatedPlayMusic.lyric = lyrics;
+        updatedPlayMusic.lyric = playMusic.value.lyric;
 
         playMusic.value = updatedPlayMusic;
         playMusic.value.playLoading = true;
@@ -569,7 +569,9 @@ export const usePlayerCoreStore = defineStore(
             );
             if (idx !== -1) {
               setTimeout(() => {
-                playlistStore.preloadNextSongs(idx);
+                if (playbackRequestManager.isRequestValid(requestId)) {
+                  playlistStore.preloadNextSongs(idx);
+                }
               }, 3000);
             }
           }
@@ -595,6 +597,10 @@ export const usePlayerCoreStore = defineStore(
             return false;
           }
         } catch (error) {
+          if (playbackRequestManager.getCurrentRequestId() !== requestId) {
+            logPlayback('playback.superseded', { ...requestState(), stage: 'play' });
+            return false;
+          }
           logPlayback('playback.failed', {
             ...requestState(),
             stage: 'play',
@@ -606,6 +612,10 @@ export const usePlayerCoreStore = defineStore(
           return false;
         }
       } catch (error) {
+        if (playbackRequestManager.getCurrentRequestId() !== requestId) {
+          logPlayback('playback.superseded', { ...requestState(), stage: 'source' });
+          return false;
+        }
         logPlayback('playback.failed', {
           ...requestState(),
           stage: 'source',
@@ -947,7 +957,7 @@ export const usePlayerCoreStore = defineStore(
         sourceKind: audioSourceKind(playMusic.value?.playMusicUrl)
       });
 
-      if (playMusic.value && Object.keys(playMusic.value).length > 0) {
+      if (playMusic.value?.id != null && playMusic.value.id !== '') {
         try {
           console.log('恢复上次播放的音乐:', playMusic.value.name);
           const isPlaying = settingStore.setData.autoPlay;
@@ -1023,10 +1033,19 @@ export const usePlayerCoreStore = defineStore(
     const initAudioDeviceListener = () => {
       if (navigator.mediaDevices) {
         navigator.mediaDevices.addEventListener('devicechange', async () => {
+          logPlayback('audio.devices-changing', {
+            ...audioService.getPlaybackDiagnostics(),
+            knownDeviceCount: availableAudioDevices.value.length
+          });
           await refreshAudioDevices();
           const exists = availableAudioDevices.value.some(
             (d) => d.deviceId === audioOutputDeviceId.value
           );
+          logPlayback('audio.devices-changed', {
+            ...audioService.getPlaybackDiagnostics(),
+            outputDeviceCount: availableAudioDevices.value.length,
+            selectedDevicePresent: exists
+          });
           if (!exists && audioOutputDeviceId.value !== 'default') {
             await setAudioOutputDevice('default');
           }

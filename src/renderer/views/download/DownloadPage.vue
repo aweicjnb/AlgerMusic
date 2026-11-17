@@ -110,7 +110,7 @@
           <div v-if="tabName === 'downloading'" class="downloading-container">
             <div v-if="downloadList.length === 0" class="empty-state py-20 text-center">
               <i
-                class="ri-download-cloud-2-line text-5xl mb-4 text-neutral-200 dark:text-neutral-800"
+                class="ri-download-cloud-2-line text-5xl mb-4 text-neutral-400 dark:text-neutral-500"
               />
               <p class="text-neutral-400">{{ t('download.empty.noTasks') }}</p>
             </div>
@@ -171,7 +171,7 @@
             <n-spin :show="isLoadingDownloaded">
               <div v-if="downloadedList.length === 0" class="empty-state py-20 text-center">
                 <i
-                  class="ri-inbox-archive-line text-5xl mb-4 text-neutral-200 dark:text-neutral-800"
+                  class="ri-inbox-archive-line text-5xl mb-4 text-neutral-400 dark:text-neutral-500"
                 />
                 <p class="text-neutral-400">{{ t('download.empty.noDownloaded') }}</p>
                 <p class="text-xs text-neutral-500 mt-2">

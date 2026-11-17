@@ -1,5 +1,11 @@
 import { Howl, Howler } from 'howler';
 
+import {
+  audioClockDelta,
+  type AudioClockSample,
+  audioOutputSnapshot,
+  mediaEventTiming
+} from '@/services/audioDiagnostics';
 import { playbackRequestManager } from '@/services/playbackRequestManager';
 import type { AudioOutputDevice } from '@/types/audio';
 import type { SongResult } from '@/types/music';
@@ -12,6 +18,7 @@ import {
   playbackErrorFields
 } from '@/utils/playbackLog';
 
+import { playbackMediaUrl } from '../../shared/localMedia';
 import type { PlaybackLogData } from '../../shared/playbackLog';
 
 const LONG_BUFFER_MS = 2_000;
@@ -98,6 +105,9 @@ class AudioService {
     { requestId?: string; audioAttempt: number; requested: ReturnType<typeof logTrack> }
   >();
   private audioAttemptCount = 0;
+  private readonly diagnosticContexts = new WeakMap<AudioContext, number>();
+  private diagnosticContextCount = 0;
+  private readonly observedDiagnosticContexts = new WeakSet<AudioContext>();
 
   private context: AudioContext | null = null;
 
@@ -107,6 +117,7 @@ class AudioService {
 
   private gainNode: GainNode | null = null;
   private lyricAnalyser: AnalyserNode | null = null;
+  private rhythmAnalyser: AnalyserNode | null = null;
 
   private bypass = false;
 
@@ -329,6 +340,7 @@ class AudioService {
 
   private async disposeEQ(keepContext = false) {
     try {
+      this.rhythmAnalyser = null;
       // 清理音频节点连接
       if (this.source) {
         this.source.disconnect();
@@ -484,6 +496,7 @@ class AudioService {
         /* already disconnected */
       }
       this.lyricAnalyser = null;
+      this.rhythmAnalyser = null;
 
       if (this.bypass) {
         // EQ被禁用时，直接连接到输出
@@ -533,6 +546,39 @@ class AudioService {
     if (this.lyricAnalyser) {
       this.gainNode?.disconnect(this.lyricAnalyser);
       this.lyricAnalyser = null;
+    }
+  }
+
+  // A read-only, unsmoothed branch before EQ and volume. No microphone or second audio output.
+  readRhythmAudio(spectrum: Uint8Array<ArrayBuffer>, waveform: Float32Array<ArrayBuffer>): number {
+    const sound = this.currentSound;
+    const source = this.source;
+    if (
+      !sound?.playing() ||
+      !source ||
+      source.context.state !== 'running' ||
+      (getMediaNode(sound) as (HTMLMediaElement & { source?: AudioNode }) | undefined)?.source !==
+        source
+    )
+      return 0;
+    if (!this.rhythmAnalyser) {
+      const analyser = source.context.createAnalyser();
+      analyser.fftSize = waveform.length;
+      analyser.smoothingTimeConstant = 0;
+      analyser.minDecibels = -85;
+      analyser.maxDecibels = -15;
+      source.connect(analyser);
+      this.rhythmAnalyser = analyser;
+    }
+    this.rhythmAnalyser.getByteFrequencyData(spectrum);
+    this.rhythmAnalyser.getFloatTimeDomainData(waveform);
+    return source.context.sampleRate;
+  }
+
+  releaseRhythmAudio(): void {
+    if (this.rhythmAnalyser) {
+      this.source?.disconnect(this.rhythmAnalyser);
+      this.rhythmAnalyser = null;
     }
   }
 
@@ -639,6 +685,12 @@ class AudioService {
       }
       this.currentSound.play();
       return Promise.resolve(this.currentSound);
+    }
+
+    try {
+      if (url) url = playbackMediaUrl(url);
+    } catch (error) {
+      return Promise.reject(error);
     }
 
     // 新播放请求：强制重置旧锁，确保不会被遗留锁阻塞
@@ -1143,8 +1195,12 @@ class AudioService {
   }
 
   private getAudioOutputDiagnostics() {
+    const context = this.context ?? Howler.ctx;
+    if (context && !this.diagnosticContexts.has(context))
+      this.diagnosticContexts.set(context, ++this.diagnosticContextCount);
     return {
-      audioContextState: this.context?.state ?? Howler.ctx?.state,
+      ...audioOutputSnapshot(context, performance.now()),
+      outputContextId: context ? this.diagnosticContexts.get(context) : undefined,
       outputGain: this.gainNode?.gain.value,
       eqBypassed: this.bypass,
       customOutputDevice: this.currentSinkId !== 'default'
@@ -1160,42 +1216,122 @@ class AudioService {
     const controller = new AbortController();
     this.mediaLogListeners.set(media, controller);
     let bufferingSince: number | undefined;
+    let bufferingEventAt: number | undefined;
     let longBufferTimer: number | undefined;
     let firstPlaying = true;
     let lastSampleAt = performance.now();
+    let previousClock: AudioClockSample | undefined;
+    let nextClockSnapshotAt = performance.now() + 5000;
+    let lastClockAnomalyAt = -Infinity;
+    let suppressedClockAnomalies = 0;
+    let settlingUntil = performance.now() + 2000;
+
+    const clockSample = () => {
+      if (!active()) {
+        if (this.pendingSound !== sound) controller.abort();
+        return;
+      }
+      if (media.paused || media.ended || media.seeking) {
+        previousClock = undefined;
+        return;
+      }
+      const now = performance.now();
+      const output = this.getAudioOutputDiagnostics();
+      const numeric = (key: string): number | undefined => {
+        const value = (output as PlaybackLogData)[key];
+        return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+      };
+      const current: AudioClockSample = {
+        timeMs: now,
+        position: media.currentTime,
+        rate: media.playbackRate,
+        contextId: output.outputContextId,
+        contextTime: numeric('contextTimeSeconds'),
+        outputTime: numeric('outputContextTimeSeconds'),
+        underrunMs: numeric('outputUnderrunMs'),
+        underrunCount: numeric('outputUnderrunCount')
+      };
+      const delta = previousClock ? audioClockDelta(previousClock, current) : undefined;
+      previousClock = current;
+      const underrun =
+        (delta?.outputUnderrunDeltaCount ?? 0) > 0 || (delta?.outputUnderrunDeltaMs ?? 0) > 0;
+      const clockGap =
+        !delta?.clockDiscontinuity &&
+        ((delta?.mediaShortfallMs ?? 0) > 150 ||
+          (delta?.contextDeltaMs !== undefined &&
+            delta.sampleIntervalMs - delta.contextDeltaMs > 200) ||
+          (delta?.outputDeltaMs !== undefined &&
+            delta.sampleIntervalMs - delta.outputDeltaMs > 200));
+      const anomalous = now >= settlingUntil && (underrun || clockGap);
+      if (anomalous && now - lastClockAnomalyAt < 5000) suppressedClockAnomalies++;
+      const logAnomaly = anomalous && now - lastClockAnomalyAt >= 5000;
+      if (logAnomaly || now >= nextClockSnapshotAt) {
+        logPlayback(
+          logAnomaly
+            ? underrun
+              ? 'audio.output-underrun'
+              : 'audio.clock-gap'
+            : 'audio.clock-sample',
+          {
+            ...audioState(),
+            ...delta,
+            callbackTimeMs: Math.round(now),
+            suppressedClockAnomalies
+          }
+        );
+        suppressedClockAnomalies = 0;
+        nextClockSnapshotAt = now + 30000;
+        if (logAnomaly) lastClockAnomalyAt = now;
+      }
+    };
 
     const clearBuffering = () => {
       if (longBufferTimer !== undefined) window.clearTimeout(longBufferTimer);
       longBufferTimer = undefined;
       bufferingSince = undefined;
+      bufferingEventAt = undefined;
     };
     const active = () => this.currentSound === sound && sound.state() !== 'unloaded';
 
     const onMediaEvent = (event: Event) => {
+      const now = performance.now();
+      const timing = mediaEventTiming(event.timeStamp, now, performance.timeOrigin);
+      const eventState = () => ({
+        ...audioState(),
+        ...timing,
+        callbackTimeMs: Math.round(now),
+        trustedEvent: event.isTrusted
+      });
       if (event.type === 'error' && (active() || this.pendingSound === sound)) {
-        logPlayback('audio.media-error', audioState());
+        logPlayback('audio.media-error', eventState());
       }
       if (!active()) {
         clearBuffering();
         return;
       }
 
-      const now = performance.now();
       if (event.type === 'timeupdate') {
         if (!media.paused && now - lastSampleAt >= PLAYBACK_SAMPLE_MS) {
           lastSampleAt = now;
-          logPlayback('audio.progress', audioState());
+          logPlayback('audio.progress', eventState());
         }
         return;
       }
       if (event.type === 'stalled') {
-        logPlayback('audio.fetch-stalled', audioState());
+        logPlayback('audio.fetch-stalled', eventState());
+        return;
+      }
+      if (['seeking', 'seeked', 'ratechange'].includes(event.type)) {
+        previousClock = undefined;
+        settlingUntil = now + 2000;
+        logPlayback(`audio.media-${event.type}`, eventState());
         return;
       }
       if (event.type === 'waiting') {
         if (bufferingSince !== undefined) return;
         bufferingSince = now;
-        logPlayback('audio.buffering', { ...audioState(), reason: event.type });
+        bufferingEventAt = timing.eventTimeMs;
+        logPlayback('audio.buffering', { ...eventState(), reason: event.type });
         longBufferTimer = window.setTimeout(() => {
           if (bufferingSince !== undefined && active() && !media.paused) {
             logPlayback('audio.buffer-long', {
@@ -1210,20 +1346,38 @@ class AudioService {
       if (event.type === 'playing' && firstPlaying) {
         firstPlaying = false;
         lastSampleAt = now;
-        logPlayback('audio.first-playing', audioState());
+        logPlayback('audio.first-playing', eventState());
       }
       if (bufferingSince !== undefined) {
         const name = event.type === 'playing' ? 'audio.buffer-resumed' : 'audio.buffer-interrupted';
         logPlayback(name, {
-          ...audioState(),
+          ...eventState(),
           reason: event.type,
-          bufferingMs: Math.round(now - bufferingSince)
+          bufferingMs: Math.round(now - bufferingSince),
+          eventBufferingMs:
+            bufferingEventAt !== undefined && timing.eventTimeMs !== undefined
+              ? Math.max(0, Math.round(timing.eventTimeMs - bufferingEventAt))
+              : undefined
         });
       }
       clearBuffering();
     };
 
-    controller.signal.addEventListener('abort', clearBuffering, { once: true });
+    const clockTimer = window.setInterval(() => {
+      try {
+        clockSample();
+      } catch {
+        /* Diagnostics cannot interrupt audio. */
+      }
+    }, 1000);
+    controller.signal.addEventListener(
+      'abort',
+      () => {
+        clearBuffering();
+        window.clearInterval(clockTimer);
+      },
+      { once: true }
+    );
     const events = [
       'waiting',
       'stalled',
@@ -1232,6 +1386,9 @@ class AudioService {
       'ended',
       'emptied',
       'error',
+      'seeking',
+      'seeked',
+      'ratechange',
       'timeupdate'
     ];
     for (const event of events) {
@@ -1351,18 +1508,28 @@ class AudioService {
    * HTMLMediaElement.setSinkId() 不再生效
    */
   public async setAudioOutputDevice(deviceId: string): Promise<boolean> {
+    logPlayback('audio.output-device-request', {
+      ...this.getPlaybackDiagnostics(),
+      customTarget: deviceId !== 'default'
+    });
     try {
       if (this.context && typeof (this.context as any).setSinkId === 'function') {
         await (this.context as any).setSinkId(deviceId);
         this.currentSinkId = deviceId;
+        logPlayback('audio.output-device-changed', this.getPlaybackDiagnostics());
         localStorage.setItem('audioOutputDeviceId', deviceId);
         console.log('音频输出设备已切换:', deviceId);
         return true;
       } else {
+        logPlayback('audio.output-device-unavailable', this.getPlaybackDiagnostics());
         console.warn('AudioContext.setSinkId 不可用');
         return false;
       }
     } catch (error) {
+      logPlayback('audio.output-device-failed', {
+        ...this.getPlaybackDiagnostics(),
+        ...playbackErrorFields(error)
+      });
       console.error('设置音频输出设备失败:', error);
       return false;
     }
@@ -1396,6 +1563,27 @@ class AudioService {
    * 监听上下文状态变化，自动恢复 suspended 状态
    */
   private setupContextStateMonitoring() {
+    const context = this.context;
+    if (context && !this.observedDiagnosticContexts.has(context)) {
+      this.observedDiagnosticContexts.add(context);
+      const report = (reason: string, event?: Event) => {
+        logPlayback('audio.context-state', {
+          ...audioOutputSnapshot(context, performance.now()),
+          outputContextId: this.diagnosticContexts.get(context),
+          activeContext: this.context === context,
+          audioTrack: logTrack(this.currentTrack),
+          reason,
+          ...(event
+            ? mediaEventTiming(event.timeStamp, performance.now(), performance.timeOrigin)
+            : {})
+        });
+      };
+      // The existing recovery listener below is unchanged; these listeners only observe.
+      this.getAudioOutputDiagnostics();
+      report('attached');
+      context.addEventListener('statechange', (event) => report('statechange', event));
+      context.addEventListener('sinkchange', (event) => report('sinkchange', event));
+    }
     if (!this.context || this.contextStateMonitoringInitialized) return;
 
     this.context.addEventListener('statechange', async () => {

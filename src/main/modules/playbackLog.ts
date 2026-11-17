@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 
 import { app, ipcMain, type WebContents } from 'electron';
 
@@ -35,6 +36,11 @@ export function writePlaybackLog(
       sessionId,
       seq,
       origin,
+      rendererToMainDelayMs:
+        origin === 'renderer' && typeof data.rendererEpochMs === 'number'
+          ? Math.max(0, Date.now() - data.rendererEpochMs)
+          : undefined,
+      logQueuedWrites: pendingWrites || undefined,
       droppedBefore: dropped || undefined,
       event,
       data
@@ -80,6 +86,29 @@ export function writePlaybackLog(
 }
 
 export function initializePlaybackLog(getMainContents: () => WebContents | undefined): void {
+  const delays = monitorEventLoopDelay({ resolution: 20 });
+  delays.enable();
+  let lastWindowAt = performance.now();
+  const timer = setInterval(() => {
+    const now = performance.now();
+    const maxMs = delays.max / 1e6;
+    if (maxMs >= 200)
+      writePlaybackLog('app.main-thread-delay', {
+        windowMs: Math.round(now - lastWindowAt),
+        maxDelayMs: Math.round(maxMs),
+        meanDelayMs: Math.round(delays.mean / 1e6),
+        p99DelayMs: Math.round(delays.percentile(99) / 1e6),
+        pendingLogWrites: pendingWrites,
+        rssMB: Math.round(process.memoryUsage().rss / 1024 / 1024)
+      });
+    lastWindowAt = now;
+    delays.reset();
+  }, 5000);
+  timer.unref();
+  app.once('will-quit', () => {
+    clearInterval(timer);
+    delays.disable();
+  });
   ipcMain.on(PLAYBACK_LOG_CHANNEL, (event, name: unknown, data: unknown) => {
     if (
       event.sender !== getMainContents() ||

@@ -5,7 +5,7 @@
   <!-- 使用animate.css进行动画效果 -->
   <div
     v-if="internalVisible"
-    class="playlist-panel"
+    class="playlist-panel app-popup"
     :class="[
       'animate__animated',
       closing
@@ -200,16 +200,9 @@ const handleDeleteSong = (song: SongResult) => {
   top: 15vh; // 距离顶部15%
   animation-duration: 0.4s !important; // 动画持续时间
 
-  @apply bg-light dark:bg-dark shadow-2xl dark:border dark:border-gray-700;
-
   &-header {
-    @apply flex items-center justify-between px-4 py-2 border-b border-gray-100 dark:border-gray-900;
-    backdrop-filter: blur(10px);
-    background-color: rgba(255, 255, 255, 0.7);
-
-    .dark & {
-      background-color: rgba(18, 18, 18, 0.7);
-    }
+    @apply flex items-center justify-between px-4 py-2 border-b;
+    border-color: var(--app-surface-border);
 
     .title {
       @apply text-base font-medium text-gray-800 dark:text-gray-200;
@@ -255,7 +248,7 @@ const handleDeleteSong = (song: SongResult) => {
 }
 
 .music-play-list-content {
-  @apply pr-2 hover:bg-light-100 dark:hover:bg-dark-100;
+  @apply pr-2;
   &:hover {
     .delete-btn {
       @apply visible;
